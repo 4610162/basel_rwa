@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Google Gemini API Key (필수)
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # CORS 허용 Origins — 프론트엔드 URL 추가
+      # 예: ["http://localhost:3000","https://your-app.vercel.app"]
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+    volumes:
+      # ChromaDB 벡터 데이터 영속화
+      - chroma_data:/app/chroma_db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  chroma_data:

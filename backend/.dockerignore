@@ -1,0 +1,23 @@
+# Virtual environments
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment files (secrets — pass via Docker env or secrets)
+.env
+
+# ChromaDB data (mount as volume)
+chroma_db/
+
+# Development artifacts
+.git/
+.gitignore
+*.md
+*.log
+
+# IDE
+.vscode/
+.idea/

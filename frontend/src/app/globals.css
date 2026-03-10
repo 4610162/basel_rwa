@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+:root {
+  --background: #0d1b2a;
+  --foreground: #e2e8f0;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: "Inter", "Noto Sans KR", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 스크롤바 스타일 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+::-webkit-scrollbar-thumb {
+  background: #374151;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+}
+
+/* 채팅 마크다운 렌더링 */
+.prose-chat {
+  @apply text-slate-200 leading-relaxed;
+}
+.prose-chat h1, .prose-chat h2, .prose-chat h3 {
+  @apply text-white font-semibold mt-4 mb-2;
+}
+.prose-chat h2 { @apply text-lg; }
+.prose-chat h3 { @apply text-base; }
+.prose-chat p { @apply mb-3; }
+.prose-chat ul, .prose-chat ol { @apply ml-4 mb-3 space-y-1; }
+.prose-chat li { @apply list-disc ml-2; }
+.prose-chat ol li { @apply list-decimal; }
+.prose-chat strong { @apply text-brand-300 font-semibold; }
+.prose-chat code {
+  @apply bg-navy-700 text-brand-200 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+.prose-chat pre {
+  @apply bg-navy-800 rounded-lg p-4 overflow-x-auto mb-3;
+}
+.prose-chat pre code { @apply bg-transparent p-0; }
+.prose-chat blockquote {
+  @apply border-l-2 border-brand-500 pl-3 text-slate-400 italic;
+}
+.prose-chat hr { @apply border-surface-border my-4; }
+.prose-chat table { @apply w-full text-sm mb-3; }
+.prose-chat th { @apply bg-navy-700 px-3 py-2 text-left text-slate-300 font-medium; }
+.prose-chat td { @apply border-t border-surface-border px-3 py-2 text-slate-300; }
+
+/* KaTeX 다크모드 오버라이드 */
+.prose-chat .katex { color: #e2e8f0; }
+.prose-chat .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.75rem 0;
+  margin: 0.5rem 0;
+}
