@@ -10,6 +10,7 @@ langchain-community
 langchain-text-splitters
 langchain-google-genai
 langchain-chroma
+langgraph>=0.2.0
 chromadb
 unstructured[md]
 tenacity

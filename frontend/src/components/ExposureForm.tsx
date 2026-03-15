@@ -14,7 +14,6 @@ interface Props {
 }
 
 export default function ExposureForm({
-  categoryId,
   entityType,
   initialValues,
   onSubmit,
@@ -22,27 +21,20 @@ export default function ExposureForm({
 }: Props) {
   const DEFAULT_EXPOSURE = 10_000_000_000;
 
-  /** 엔티티 타입에 defaultValue가 지정된 필드들의 초기값 */
-  function buildFieldDefaults(): Record<string, unknown> {
-    const defaults: Record<string, unknown> = {};
-    for (const f of entityType.fields) {
-      if (f.defaultValue !== undefined) {
-        defaults[f.name] = f.defaultValue;
-      }
-    }
-    return defaults;
-  }
-
   const [values, setValues] = useState<Record<string, unknown>>({
     exposure: DEFAULT_EXPOSURE,
-    ...buildFieldDefaults(),
+    ...getFieldDefaults(entityType),
     ...initialValues,
   });
 
   // Reset when entity type changes
   useEffect(() => {
-    setValues({ exposure: DEFAULT_EXPOSURE, ...buildFieldDefaults(), ...initialValues });
-  }, [entityType.value]);
+    setValues({
+      exposure: DEFAULT_EXPOSURE,
+      ...getFieldDefaults(entityType),
+      ...initialValues,
+    });
+  }, [entityType, initialValues]);
 
   function handleChange(name: string, value: unknown) {
     setValues((prev) => ({ ...prev, [name]: value }));
@@ -237,4 +229,14 @@ function formatKRWHelper(value: number): string {
   if (Math.abs(value) >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}억원`;
   if (Math.abs(value) >= 10_000) return `${(value / 10_000).toFixed(1)}만원`;
   return `${value.toLocaleString("ko-KR")}원`;
+}
+
+function getFieldDefaults(entityType: EntityTypeConfig): Record<string, unknown> {
+  const defaults: Record<string, unknown> = {};
+  for (const field of entityType.fields) {
+    if (field.defaultValue !== undefined) {
+      defaults[field.name] = field.defaultValue;
+    }
+  }
+  return defaults;
 }

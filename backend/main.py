@@ -1,10 +1,13 @@
 """
 Basel III RWA Calculator — FastAPI Backend
 """
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.core.rag_engine import get_rag_status, warm_vectorstore
 from app.routers import chat, calculate
 
 settings = get_settings()
@@ -29,15 +32,27 @@ app.include_router(calculate.router, prefix="/api/calculate", tags=["RWA Calcula
 
 @app.get("/api/health", tags=["Health"])
 async def health():
-    return {"status": "ok", "service": "Basel III RWA API"}
+    return {
+        "status": "ok",
+        "service": "Basel III RWA API",
+        "rag": get_rag_status(),
+    }
+
+
+def _warm_rag_in_background():
+    try:
+        warm_vectorstore()
+        print("[Startup] 벡터스토어 백그라운드 초기화 완료.")
+    except Exception as e:
+        print(f"[Startup] 벡터스토어 백그라운드 초기화 실패 (채팅 기능 지연 가능): {e}")
 
 
 @app.on_event("startup")
 async def startup_event():
-    """앱 시작 시 벡터스토어를 미리 초기화."""
-    from app.core.rag_engine import get_vectorstore
-    try:
-        get_vectorstore()
-        print("[Startup] 벡터스토어 초기화 완료.")
-    except Exception as e:
-        print(f"[Startup] 벡터스토어 초기화 실패 (채팅 기능 불가): {e}")
+    """앱 시작 시 RAG 초기화를 백그라운드에서 시작한다."""
+    app.state.rag_warmup_thread = threading.Thread(
+        target=_warm_rag_in_background,
+        name="rag-warmup",
+        daemon=True,
+    )
+    app.state.rag_warmup_thread.start()

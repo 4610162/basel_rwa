@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BarChart3, MessageSquare, ChevronRight } from "lucide-react";
+import { BarChart3, MessageSquare } from "lucide-react";
 import Chat from "@/components/Chat";
 import Calculator from "@/components/Calculator";
 import { cn } from "@/lib/utils";

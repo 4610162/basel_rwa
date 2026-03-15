@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, FormEvent } from "react";
+import { useState, useRef, useEffect } from "react";
 
 /**
  * LLM 응답에서 LaTeX 수식 형식을 정규화합니다.
@@ -37,6 +37,12 @@ function preprocessMathContent(content: string): string {
     /\x00MATHBLOCK(\d+)\x00/g,
     (_, i) => protected_blocks[Number(i)]
   );
+
+  // 5. 스트리밍 중 미완성 $$ 블록 자동 닫기 (홀수 개 = 열린 블록 존재)
+  const ddCount = (result.match(/\$\$/g) || []).length;
+  if (ddCount % 2 !== 0) {
+    result += "\n$$";
+  }
 
   return result;
 }
@@ -239,7 +245,7 @@ function MessageBubble({ message }: { message: Message }) {
                 <div className="prose-chat text-sm">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
+                    rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false }]]}
                   >
                     {preprocessMathContent(message.content)}
                   </ReactMarkdown>
