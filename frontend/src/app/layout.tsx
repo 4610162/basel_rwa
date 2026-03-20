@@ -20,7 +20,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" className="dark">
-      <body className="min-h-screen bg-navy-900 text-slate-200 antialiased">
+      <body className="h-screen overflow-hidden bg-navy-900 text-slate-200 antialiased">
         {children}
       </body>
     </html>

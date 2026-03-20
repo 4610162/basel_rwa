@@ -74,11 +74,13 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
+    }
   }, [messages]);
 
   async function handleSubmit(query: string = input) {
@@ -147,7 +149,7 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4 sm:px-4 space-y-5 sm:space-y-6">
+      <div ref={messagesRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4 sm:px-4 space-y-5 sm:space-y-6">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-6 pb-20">
             <div className="text-center">
@@ -179,7 +181,6 @@ export default function Chat() {
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
-        <div ref={bottomRef} />
       </div>
 
       {/* Input Area */}
