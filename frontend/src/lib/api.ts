@@ -71,6 +71,63 @@ export interface SourceDoc {
   metadata: Record<string, unknown>;
 }
 
+// ─── DB조회 타입 ───────────────────────────────────────────────────────────────
+
+export interface DbQueryRequest {
+  query_type: "loan_no" | "product_code";
+  base_ym: string; // YYYY-MM
+  loan_no?: string | null;
+  product_code?: string | null;
+}
+
+export interface DbQuerySummary {
+  total_bs_balance: number;
+  total_ead: number;
+  total_rwa: number;
+  avg_rw: number | null;
+  record_count: number;
+}
+
+export interface DbQueryRow {
+  base_ym: string;
+  loan_no: string;
+  product_code: string;
+  bs_balance: number;
+  ead: number;
+  rwa: number;
+  rw: number | null;
+}
+
+export interface DbQueryResponse {
+  success: boolean;
+  query: Record<string, unknown>;
+  summary: DbQuerySummary | null;
+  rows: DbQueryRow[];
+  message?: string;
+  error_code?: string;
+}
+
+export async function getBaseYmList(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/db-query/base-ym-list`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function queryDb(req: DbQueryRequest): Promise<DbQueryResponse> {
+  const res = await fetch(`${BASE_URL}/db-query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? "DB 조회 오류");
+  }
+  return res.json();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 export async function calculateRwa(req: RwaRequest): Promise<RwaResult> {
   const res = await fetch(`${BASE_URL}/calculate/rwa`, {
     method: "POST",

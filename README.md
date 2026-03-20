@@ -275,3 +275,62 @@ A. Python 3.11+ 환경에서 실행하거나 `pysqlite3-binary`를 추가 설치
 ```bash
 pip install pysqlite3-binary
 ```
+
+
+네. 순서는 백엔드 Railway -> 프론트 Vercel -> 다시 백엔드 CORS 보정이 가장 깔끔합니다.
+
+1. 백엔드 Railway 배포
+
+코드를 GitHub에 올립니다.
+Railway에서 New Project를 누르고 Deploy from GitHub repo를 선택합니다.
+이 저장소를 연결합니다.
+서비스 설정에서 Root Directory를 /backend로 지정합니다.
+Railway monorepo docs
+backend/Dockerfile이 있으니 Railway가 이 Dockerfile을 사용해 빌드합니다.
+Railway Dockerfile docs
+Railway 서비스의 Variables에 아래를 넣습니다.
+GOOGLE_API_KEY=실제_구글_API_키
+CORS_ORIGINS=["http://localhost:3000"]
+배포가 끝나면 서비스 Settings -> Networking에서 Generate Domain을 눌러 공개 주소를 만듭니다.
+브라우저에서 아래처럼 확인합니다.
+https://생성된-railway-주소/api/health
+정상이라면 JSON이 보여야 합니다.
+
+2. 프론트 Vercel 배포
+
+Vercel에서 Add New -> Project를 선택합니다.
+같은 GitHub 저장소를 import 합니다.
+Root Directory를 frontend로 지정합니다.
+Vercel monorepo docs
+환경변수 BACKEND_URL을 추가합니다.
+BACKEND_URL=https://생성된-railway-주소
+중요: /api는 붙이지 않습니다.
+5. Deploy 합니다.
+6. 배포가 끝나면 Vercel 도메인 예: https://your-app.vercel.app 를 확인합니다.
+
+3. Railway에서 CORS_ORIGINS 수정
+이제 백엔드 Railway로 돌아가서 CORS_ORIGINS를 프론트 주소로 바꿉니다.
+
+CORS_ORIGINS=["https://your-app.vercel.app"]
+로컬도 같이 쓰려면:
+
+CORS_ORIGINS=["http://localhost:3000","https://your-app.vercel.app"]
+저장 후 재배포합니다.
+
+4. 최종 확인
+
+Vercel 프론트 주소에 접속합니다.
+계산기 요청과 채팅 요청이 정상 동작하는지 봅니다.
+Railway 백엔드 로그에서 에러가 없는지 확인합니다.
+메뉴 위치 요약
+
+Railway: Project -> Service -> Settings -> Root Directory / Networking, Variables
+Vercel: Project -> Settings -> Environment Variables, import 시 Root Directory
+주의
+
+BACKEND_URL은 Railway 백엔드 주소 맞습니다.
+CORS_ORIGINS는 JSON 배열 문자열이어야 합니다.
+환경변수 추가 후에는 이전 배포에 자동 반영되지 않아서 재배포가 필요합니다.
+Vercel env docs
+Railway variables docs
+원하시면 다음 답변에서 Railway 화면 기준으로 정말 클릭 순서대로, “어느 버튼 누르고 무슨 값 넣는지” 체크리스트 형태로 더 좁혀드릴게요.

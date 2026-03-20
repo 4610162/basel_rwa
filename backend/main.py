@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.rag_engine import get_rag_status, warm_vectorstore
-from app.routers import chat, calculate
+from app.routers import chat, calculate, db_query
 
 settings = get_settings()
 
@@ -28,6 +28,17 @@ app.add_middleware(
 
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat (RAG)"])
 app.include_router(calculate.router, prefix="/api/calculate", tags=["RWA Calculate"])
+app.include_router(db_query.router, prefix="/api/db-query", tags=["DB Query"])
+
+
+@app.get("/", tags=["Root"])
+async def root():
+    return {
+        "service": "Basel III RWA Calculator API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
 
 
 @app.get("/api/health", tags=["Health"])

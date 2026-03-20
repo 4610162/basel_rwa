@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { BarChart3, MessageSquare } from "lucide-react";
+import { BarChart3, MessageSquare, Database } from "lucide-react";
 import Chat from "@/components/Chat";
 import Calculator from "@/components/Calculator";
+import DbQuery from "@/components/DbQuery";
 import { cn } from "@/lib/utils";
 
-type ActiveTab = "calculator" | "chat";
+type ActiveTab = "calculator" | "chat" | "dbquery";
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("calculator");
@@ -45,6 +46,12 @@ export default function HomePage() {
               icon={<MessageSquare className="w-4 h-4" />}
               label="세칙 Q&A"
             />
+            <TabButton
+              active={activeTab === "dbquery"}
+              onClick={() => setActiveTab("dbquery")}
+              icon={<Database className="w-4 h-4" />}
+              label="DB조회"
+            />
           </nav>
         </div>
       </header>
@@ -56,6 +63,9 @@ export default function HomePage() {
         </div>
         <div className={cn("h-full", activeTab !== "chat" && "hidden")}>
           <Chat />
+        </div>
+        <div className={cn("h-full", activeTab !== "dbquery" && "hidden")}>
+          <DbQuery />
         </div>
       </main>
     </div>
