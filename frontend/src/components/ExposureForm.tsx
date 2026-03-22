@@ -3,7 +3,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { Loader2, Calculator } from "lucide-react";
 import { EntityTypeConfig, FieldConfig } from "@/lib/exposureConfig";
-import { cn } from "@/lib/utils";
+import { cn, formatKRW } from "@/lib/utils";
 
 interface Props {
   categoryId: string;
@@ -72,7 +72,7 @@ export default function ExposureForm({
         />
         {Boolean(values.exposure) && (
           <p className="text-xs text-slate-500">
-            {formatKRWHelper(Number(values.exposure))}
+            {formatKRW(Number(values.exposure))}
           </p>
         )}
       </div>
@@ -222,13 +222,6 @@ function DynamicField({
   }
 
   return null;
-}
-
-function formatKRWHelper(value: number): string {
-  if (Math.abs(value) >= 1_000_000_000_000) return `${(value / 1_000_000_000_000).toFixed(2)}조원`;
-  if (Math.abs(value) >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}억원`;
-  if (Math.abs(value) >= 10_000) return `${(value / 10_000).toFixed(1)}만원`;
-  return `${value.toLocaleString("ko-KR")}원`;
 }
 
 function getFieldDefaults(entityType: EntityTypeConfig): Record<string, unknown> {

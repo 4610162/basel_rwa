@@ -2,110 +2,16 @@
  * FastAPI 백엔드 API 클라이언트
  * Next.js rewrites를 통해 /api/* → http://localhost:8000/api/*
  */
+import {
+  ChatHistoryItem,
+  ChatStreamEvent,
+  DbQueryRequest,
+  DbQueryResponse,
+  RwaRequest,
+  RwaResult,
+} from "@/types/api";
 
 const BASE_URL = "/api";
-
-export interface RwaRequest {
-  exposure_category: string;
-  entity_type: string;
-  exposure: number;
-  entity_name?: string;
-  external_credit_rating?: string;
-  oecd_grade?: number;
-  is_local_currency?: boolean;
-  is_korea?: boolean;
-  pse_category?: string;
-  country_gov_external_credit_rating?: string;
-  // Bank
-  dd_grade?: string;
-  cet1_ratio?: number;
-  leverage_ratio?: number;
-  is_foreign_currency?: boolean;
-  is_trade_lc?: boolean;
-  country_gov_oecd_grade?: number;
-  issuing_bank_rw?: number;
-  is_bank_equiv_regulated?: boolean;
-  // Corp
-  short_grade?: string;
-  is_sme_legal?: boolean;
-  annual_revenue_eok?: number;
-  total_assets_eok?: number;
-  country_floor_rw?: number;
-  debtor_short_rw?: number;
-  pf_stage?: string;
-  pf_op_high_quality?: boolean;
-  slotting_grade?: string;
-  slotting_short_or_safe?: boolean;
-  // RealEstate
-  re_exposure_type?: string;
-  ltv_ratio?: number;
-  is_eligible?: boolean;
-  borrower_risk_weight?: number;
-  is_residential_exception?: boolean;
-  has_construction_guarantee?: boolean;
-  contractor_credit_rating?: string;
-  guarantor_exposure?: number;
-  // CIU
-  ciu_approach?: string;
-  weighted_avg_rw?: number;
-  // Equity
-  equity_type?: string;
-  // Securitisation SEC-SA
-  attachment_point?: number;
-  detachment_point?: number;
-  k_sa?: number;
-  w?: number;
-  p?: number;
-}
-
-export interface RwaResult {
-  entity_type: string;
-  risk_weight: number;
-  risk_weight_pct: string;
-  rwa: number;
-  basis: string;
-}
-
-export interface SourceDoc {
-  content: string;
-  metadata: Record<string, unknown>;
-}
-
-// ─── DB조회 타입 ───────────────────────────────────────────────────────────────
-
-export interface DbQueryRequest {
-  query_type: "loan_no" | "product_code";
-  base_ym: string; // YYYY-MM
-  loan_no?: string | null;
-  product_code?: string | null;
-}
-
-export interface DbQuerySummary {
-  total_bs_balance: number;
-  total_ead: number;
-  total_rwa: number;
-  avg_rw: number | null;
-  record_count: number;
-}
-
-export interface DbQueryRow {
-  base_ym: string;
-  loan_no: string;
-  product_code: string;
-  bs_balance: number;
-  ead: number;
-  rwa: number;
-  rw: number | null;
-}
-
-export interface DbQueryResponse {
-  success: boolean;
-  query: Record<string, unknown>;
-  summary: DbQuerySummary | null;
-  rows: DbQueryRow[];
-  message?: string;
-  error_code?: string;
-}
 
 export async function getBaseYmList(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/db-query/base-ym-list`);
@@ -141,18 +47,19 @@ export async function calculateRwa(req: RwaRequest): Promise<RwaResult> {
   return res.json();
 }
 
-export async function* streamChat(
-  query: string,
-  history: { role: string; content: string }[] = []
-): AsyncGenerator<{ type: "sources"; sources: SourceDoc[] } | { type: "chunk"; text: string }> {
-  const res = await fetch(`${BASE_URL}/chat/stream`, {
+async function* streamSseJson(
+  path: string,
+  body: Record<string, unknown>
+): AsyncGenerator<ChatStreamEvent> {
+  const res = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, history }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok || !res.body) {
-    throw new Error("스트리밍 연결 실패");
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? "스트리밍 연결 실패");
   }
 
   const reader = res.body.getReader();
@@ -178,4 +85,18 @@ export async function* streamChat(
       }
     }
   }
+}
+
+export async function* streamChat(
+  query: string,
+  history: ChatHistoryItem[] = []
+): AsyncGenerator<ChatStreamEvent> {
+  yield* streamSseJson("/chat/stream", { query, history });
+}
+
+export async function* streamAgentChat(
+  query: string,
+  history: ChatHistoryItem[] = []
+): AsyncGenerator<ChatStreamEvent> {
+  yield* streamSseJson("/chat/agent/stream", { question: query, history });
 }

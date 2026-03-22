@@ -207,7 +207,7 @@ vercel --prod
 | `GET` | `/api/health` | 헬스체크 |
 | `GET` | `/docs` | Swagger UI |
 | `POST` | `/api/calculate/rwa` | RWA 산출 |
-| `POST` | `/api/chat/stream` | 세칙 Q&A (SSE 스트리밍) |
+| `POST` | `/api/chat/stream` | RWA 챗봇 (SSE 스트리밍) |
 
 ### RWA 산출 예시
 

@@ -15,6 +15,7 @@ import os
 
 from app.core.config import get_settings
 from app.graph.state import GraphState
+from app.graph.utils import format_conversation_history
 
 ANSWER_PROMPT_TEMPLATE = """\
 당신은 금융감독원 은행업감독업무시행세칙 전문가입니다.
@@ -32,6 +33,10 @@ ANSWER_PROMPT_TEMPLATE = """\
    - 여러 줄 정렬 수식: `$$\\begin{{aligned}}\\n수식\\n\\end{{aligned}}$$`
    - `\\begin{{split}}` 환경은 사용하지 마세요. 반드시 `\\begin{{aligned}}`를 사용하세요.
 {calc_section}
+## 최근 대화 맥락 (참고용)
+
+{history}
+
 ## 세칙 원문 발췌
 
 {context_blocks}
@@ -54,6 +59,10 @@ CLARIFICATION_PROMPT_TEMPLATE = """\
 1. 어떤 정보가 왜 필요한지 친절하게 설명하세요.
 2. 각 정보의 예시 값을 제시하세요.
 3. 마크다운 형식으로 작성하세요.
+
+## 최근 대화 맥락 (참고용)
+
+{history}
 
 ## 세칙 원문 발췌 (참고용)
 
@@ -151,6 +160,7 @@ def _build_answer_prompt(state: GraphState) -> str:
 
     return ANSWER_PROMPT_TEMPLATE.format(
         calc_section=calc_section,
+        history=format_conversation_history(state.get("conversation_history", [])),
         context_blocks=context_blocks or "관련 조문 검색 결과 없음",
         question=state["user_question"],
     )
@@ -185,6 +195,7 @@ def _build_clarification_prompt(state: GraphState) -> str:
 
     return CLARIFICATION_PROMPT_TEMPLATE.format(
         missing_list=missing_list,
+        history=format_conversation_history(state.get("conversation_history", [])),
         context_blocks=context_blocks or "관련 조문 없음",
         question=state["user_question"],
     )
@@ -198,8 +209,6 @@ def _format_context(docs: list[dict]) -> str:
         f"[참조 {i + 1}]\n{doc['content']}"
         for i, doc in enumerate(docs[:5])
     )
-
-
 async def _generate(client, settings, prompt: str) -> str:
     """Gemini generate_content 호출. 쿼터 초과 시 fallback 모델로 재시도."""
     from google.genai import errors as genai_errors

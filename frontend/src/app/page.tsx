@@ -13,7 +13,7 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("calculator");
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-[100dvh] overflow-hidden">
       {/* Header */}
       <header className="flex-none border-b border-surface-border bg-navy-800/80 backdrop-blur-sm">
         <div className="max-w-screen-2xl mx-auto px-3 py-3 sm:px-6 flex items-center justify-between gap-3">
@@ -44,7 +44,7 @@ export default function HomePage() {
               active={activeTab === "chat"}
               onClick={() => setActiveTab("chat")}
               icon={<MessageSquare className="w-4 h-4" />}
-              label="세칙 Q&A"
+              label="RWA 챗봇"
             />
             <TabButton
               active={activeTab === "dbquery"}

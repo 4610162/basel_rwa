@@ -1,58 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-
-/**
- * LLM 응답에서 LaTeX 수식 형식을 정규화합니다.
- *
- * 처리 케이스:
- * 1. \begin{split}...\end{split} → \begin{aligned}...\end{aligned} (+ =& → &= 변환)
- * 2. $$ 없이 단독으로 등장하는 \begin{aligned/align/...}...\end{...} → $$...$$로 감싸기
- */
-function preprocessMathContent(content: string): string {
-  // 1. \begin{split} → \begin{aligned}, 정렬 기호 수정: "x =& expr" → "x &= expr"
-  let result = content.replace(
-    /\\begin\{split\}([\s\S]*?)\\end\{split\}/g,
-    (_, body) => {
-      const fixedBody = body.replace(/=\s*&\s*/g, " &= ");
-      return `\\begin{aligned}${fixedBody}\\end{aligned}`;
-    }
-  );
-
-  // 2. 이미 $$ 안에 있는 블록을 플레이스홀더로 보호 (이중 감싸기 방지)
-  const protected_blocks: string[] = [];
-  result = result.replace(/\$\$[\s\S]*?\$\$/g, (match) => {
-    protected_blocks.push(match);
-    return `\x00MATHBLOCK${protected_blocks.length - 1}\x00`;
-  });
-
-  // 3. $$ 없이 단독으로 등장하는 multi-line 환경을 $$ 블록으로 감싸기
-  result = result.replace(
-    /\\begin\{(aligned|align\*?|equation\*?|gather\*?)\}[\s\S]*?\\end\{\1\}/g,
-    (match) => `\n$$\n${match}\n$$\n`
-  );
-
-  // 4. 플레이스홀더 복원
-  result = result.replace(
-    /\x00MATHBLOCK(\d+)\x00/g,
-    (_, i) => protected_blocks[Number(i)]
-  );
-
-  // 5. 스트리밍 중 미완성 $$ 블록 자동 닫기 (홀수 개 = 열린 블록 존재)
-  const ddCount = (result.match(/\$\$/g) || []).length;
-  if (ddCount % 2 !== 0) {
-    result += "\n$$";
-  }
-
-  return result;
-}
-import { Send, Loader2, BookOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { Send, Loader2, BookOpen, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { streamChat, SourceDoc } from "@/lib/api";
+import { streamAgentChat, streamChat } from "@/lib/api";
+import { preprocessMathContent } from "@/lib/chatMath";
 import { cn } from "@/lib/utils";
+import { SourceDoc } from "@/types/api";
 
 interface Message {
   id: string;
@@ -74,6 +31,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [useAgentMode, setUseAgentMode] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -103,8 +61,9 @@ export default function Chat() {
 
     try {
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      const stream = useAgentMode ? streamAgentChat : streamChat;
 
-      for await (const event of streamChat(query, history)) {
+      for await (const event of stream(query, history)) {
         if (event.type === "sources") {
           setMessages((prev) =>
             prev.map((m) =>
@@ -157,7 +116,7 @@ export default function Chat() {
                 <BookOpen className="w-7 h-7 text-brand-400" />
               </div>
               <h2 className="text-xl font-semibold text-white mb-2">
-                Basel III 세칙 Q&A
+                Basel III RWA 챗봇
               </h2>
               <p className="text-slate-400 text-sm max-w-md">
                 은행업감독업무시행세칙 [별표 3] 원문을 기반으로 RWA 산출 관련 질문에
@@ -184,39 +143,66 @@ export default function Chat() {
       </div>
 
       {/* Input Area */}
-      <div className="flex-none border-t border-surface-border bg-navy-800/50 px-3 py-3 sm:p-4">
-        <div className="max-w-3xl mx-auto flex gap-2 sm:gap-3 items-end">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="세칙 관련 질문을 입력하세요..."
-            rows={1}
-            className="flex-1 resize-none bg-navy-900 border border-surface-border rounded-xl px-3 py-2.5 sm:px-4 sm:py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-600 transition-colors text-sm leading-relaxed min-h-[44px] max-h-32"
-            style={{ height: "auto" }}
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${el.scrollHeight}px`;
-            }}
-          />
-          <button
-            onClick={() => handleSubmit()}
-            disabled={!input.trim() || isLoading}
-            className={cn(
-              "flex-none w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center transition-all",
-              input.trim() && !isLoading
-                ? "bg-brand-600 hover:bg-brand-500 text-white shadow-lg"
-                : "bg-navy-700 text-slate-600 cursor-not-allowed"
+      <div className="flex-none border-t border-surface-border bg-navy-800/50 px-3 py-3 sm:p-4 pb-safe">
+        <div className="max-w-3xl mx-auto space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+              Response Mode
+            </span>
+            <div className="relative">
+              <select
+                value={useAgentMode ? "agent" : "legacy"}
+                onChange={(e) => setUseAgentMode(e.target.value === "agent")}
+                className="appearance-none rounded-lg border border-surface-border bg-navy-900 pl-3 pr-9 py-2 text-sm text-slate-200 shadow-sm outline-none transition-colors hover:border-slate-500 focus:border-brand-600"
+              >
+                <option value="legacy">Legacy Mode</option>
+                <option value="agent">Agent Mode</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            </div>
+          </div>
+          <div className="flex gap-2 sm:gap-3 items-end">
+            {messages.length > 0 && (
+              <button
+                onClick={() => setMessages([])}
+                title="대화 초기화"
+                className="flex-none w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center bg-navy-700 border border-surface-border hover:border-slate-500 text-slate-500 hover:text-slate-300 transition-all"
+              >
+                <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
             )}
-          >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4 sm:w-5 sm:h-5" />
-            )}
-          </button>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="세칙 관련 질문을 입력하세요..."
+              rows={1}
+              className="flex-1 resize-none bg-navy-900 border border-surface-border rounded-xl px-3 py-2.5 sm:px-4 sm:py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-600 transition-colors text-sm leading-relaxed min-h-[44px] max-h-32"
+              style={{ height: "auto" }}
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${el.scrollHeight}px`;
+              }}
+            />
+            <button
+              onClick={() => handleSubmit()}
+              disabled={!input.trim() || isLoading}
+              className={cn(
+                "flex-none w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center transition-all",
+                input.trim() && !isLoading
+                  ? "bg-brand-600 hover:bg-brand-500 text-white shadow-lg"
+                  : "bg-navy-700 text-slate-600 cursor-not-allowed"
+              )}
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 sm:w-5 sm:h-5" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

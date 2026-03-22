@@ -18,6 +18,7 @@ class GraphState(TypedDict):
     # ── 입력 ──────────────────────────────────────────────────────────────────
     user_question: str
     normalized_question: str
+    conversation_history: list[dict[str, str]]
 
     # ── Classification Agent 출력 ─────────────────────────────────────────────
     intent: str

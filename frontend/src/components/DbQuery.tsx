@@ -5,32 +5,19 @@ import { Search, RotateCcw, AlertCircle, InboxIcon } from "lucide-react";
 import {
   queryDb,
   getBaseYmList,
-  DbQueryRequest,
-  DbQueryResponse,
-  DbQuerySummary,
-  DbQueryRow,
 } from "@/lib/api";
-
-// ─── 숫자 포매팅 헬퍼 ─────────────────────────────────────────────────────────
-
-function formatAmount(value: number): string {
-  return new Intl.NumberFormat("ko-KR").format(Math.round(value));
-}
-
-function formatRw(value: number | null): string {
-  if (value === null || value === undefined) return "-";
-  return (value * 100).toFixed(2) + "%";
-}
+import { formatBaseYm, formatRatioPercent, formatRoundedNumber } from "@/lib/utils";
+import { DbQueryRequest, DbQueryResponse, DbQuerySummary, DbQueryRow } from "@/types/api";
 
 // ─── 요약 카드 ────────────────────────────────────────────────────────────────
 
 function SummaryCard({ summary }: { summary: DbQuerySummary }) {
   const cards = [
     { label: "조회 건수", value: summary.record_count.toLocaleString("ko-KR") + " 건" },
-    { label: "총 BS잔액", value: formatAmount(summary.total_bs_balance) + " 원" },
-    { label: "총 EAD", value: formatAmount(summary.total_ead) + " 원" },
-    { label: "총 RWA", value: formatAmount(summary.total_rwa) + " 원" },
-    { label: "평균 RW율 (가중)", value: formatRw(summary.avg_rw) },
+    { label: "총 BS잔액", value: formatRoundedNumber(summary.total_bs_balance) + " 원" },
+    { label: "총 EAD", value: formatRoundedNumber(summary.total_ead) + " 원" },
+    { label: "총 RWA", value: formatRoundedNumber(summary.total_rwa) + " 원" },
+    { label: "평균 RW율 (가중)", value: formatRatioPercent(summary.avg_rw) },
   ];
 
   return (
@@ -55,11 +42,6 @@ function DetailTable({ rows }: { rows: DbQueryRow[] }) {
 
   const headers = ["기준월", "대출번호", "영업상품코드", "BS잔액", "EAD", "RWA", "RW율"];
 
-  function formatBaseYm(ym: string): string {
-    if (ym.length === 6) return ym.slice(0, 4) + "-" + ym.slice(4);
-    return ym;
-  }
-
   return (
     <div className="overflow-x-auto rounded-lg border border-surface-border">
       <table className="w-full text-sm text-left">
@@ -78,10 +60,10 @@ function DetailTable({ rows }: { rows: DbQueryRow[] }) {
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{formatBaseYm(row.base_ym)}</td>
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{row.loan_no}</td>
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{row.product_code}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatAmount(row.bs_balance)}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatAmount(row.ead)}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatAmount(row.rwa)}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRw(row.rw)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.bs_balance)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.ead)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.rwa)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRatioPercent(row.rw)}</td>
             </tr>
           ))}
         </tbody>

@@ -11,6 +11,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -20,7 +21,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" className="dark">
-      <body className="h-screen overflow-hidden bg-navy-900 text-slate-200 antialiased">
+      <body className="h-[100dvh] overflow-hidden bg-navy-900 text-slate-200 antialiased">
         {children}
       </body>
     </html>

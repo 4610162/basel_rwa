@@ -16,6 +16,7 @@ import re
 
 from app.core.config import get_settings
 from app.graph.state import GraphState
+from app.graph.utils import format_conversation_history
 
 # ── 각 exposure_type별 필수 계산 파라미터 정의 ─────────────────────────────────
 REQUIRED_FIELDS_MAP: dict[str, list[str]] = {
@@ -100,6 +101,9 @@ AAA, AA+, AA, AA-, A+, A, A-, BBB+, BBB, BBB-, BB+, BB, BB-, B+, B, B-, CCC 이�
 
 ## 사용자 질문
 {question}
+
+## 최근 대화 맥락 (참고용)
+{history}
 """
 
 
@@ -115,7 +119,10 @@ async def classification_node(state: GraphState) -> dict:
     client = google_genai.Client(api_key=api_key)
 
     question = state.get("normalized_question") or state["user_question"]
-    prompt = CLASSIFICATION_PROMPT.format(question=question)
+    prompt = CLASSIFICATION_PROMPT.format(
+        question=question,
+        history=format_conversation_history(state.get("conversation_history", [])),
+    )
 
     raw_json: dict = {}
     try:
@@ -192,8 +199,6 @@ def _compute_missing(required: list[str], params: dict) -> list[str]:
         f for f in required
         if f not in params or params[f] is None
     ]
-
-
 def _fallback_classification(question: str, error: str = "") -> dict:
     """분류 LLM 호출 실패 시 regulation_only로 안전하게 fallback."""
     return {

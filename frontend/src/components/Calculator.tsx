@@ -5,8 +5,10 @@ import { BarChart3, AlertCircle, ChevronRight, RotateCcw } from "lucide-react";
 import { EXPOSURE_CATEGORIES, CategoryConfig, EntityTypeConfig } from "@/lib/exposureConfig";
 import ExposureForm from "@/components/ExposureForm";
 import RwaResultCard from "@/components/RwaResultCard";
-import { calculateRwa, RwaRequest, RwaResult } from "@/lib/api";
+import { calculateRwa } from "@/lib/api";
+import { buildRwaRequest } from "@/lib/rwaRequest";
 import { cn } from "@/lib/utils";
+import { RwaResult } from "@/types/api";
 
 export default function Calculator() {
   const [selectedCategory, setSelectedCategory] = useState<CategoryConfig>(EXPOSURE_CATEGORIES[0]);
@@ -36,39 +38,7 @@ export default function Calculator() {
   async function handleCalculate(values: Record<string, unknown>) {
     setError(null);
     setIsLoading(true);
-
-    // Build request payload
-    const req: RwaRequest = {
-      exposure_category: selectedCategory.id,
-      entity_type: selectedEntityType.value,
-      exposure: Number(values.exposure) || 0,
-      ...buildCategoryPayload(selectedCategory.id, selectedEntityType.value, values),
-    };
-
-    // CIU approach mapping
-    if (selectedCategory.id === "ciu") {
-      req.ciu_approach = selectedEntityType.value; // lta | mba | fba
-      if (values.weighted_avg_rw !== undefined) {
-        req.weighted_avg_rw = Number(values.weighted_avg_rw) / 100;
-      }
-    }
-
-    // Equity type mapping
-    if (selectedCategory.id === "equity") {
-      req.equity_type = selectedEntityType.value;
-    }
-
-    // RealEstate type mapping
-    if (selectedCategory.id === "realestate") {
-      req.re_exposure_type = selectedEntityType.value;
-    }
-
-    // Securitisation: p 기본값 1.0 보장
-    if (selectedCategory.id === "securitization") {
-      if (req.p === undefined || req.p === null) {
-        req.p = 1.0;
-      }
-    }
+    const req = buildRwaRequest(selectedCategory.id, selectedEntityType.value, values);
 
     try {
       const res = await calculateRwa(req);
@@ -298,80 +268,4 @@ export default function Calculator() {
       </aside>
     </div>
   );
-}
-
-/** 카테고리별 request payload 빌드 헬퍼 */
-function buildCategoryPayload(
-  categoryId: string,
-  entityType: string,
-  values: Record<string, unknown>
-): Partial<RwaRequest> {
-  const numPct = (key: string) =>
-    values[key] !== undefined ? Number(values[key]) / 100 : undefined;
-  const num = (key: string) =>
-    values[key] !== undefined ? Number(values[key]) : undefined;
-  const str = (key: string) =>
-    values[key] ? String(values[key]) : undefined;
-  const bool = (key: string) => Boolean(values[key]);
-
-  switch (categoryId) {
-    case "gov":
-      return {
-        external_credit_rating: str("external_credit_rating"),
-        oecd_grade: values.oecd_grade ? num("oecd_grade") : undefined,
-        is_local_currency: bool("is_local_currency"),
-        is_korea: bool("is_korea"),
-        entity_name: str("entity_name"),
-        pse_category: str("pse_category"),
-        country_gov_external_credit_rating: str("country_gov_external_credit_rating"),
-      };
-    case "bank":
-      return {
-        external_credit_rating: str("external_credit_rating"),
-        oecd_grade: values.oecd_grade ? num("oecd_grade") : undefined,
-        dd_grade: str("dd_grade"),
-        cet1_ratio: values.cet1_ratio ? numPct("cet1_ratio") : undefined,
-        leverage_ratio: values.leverage_ratio ? numPct("leverage_ratio") : undefined,
-        is_foreign_currency: bool("is_foreign_currency"),
-        is_trade_lc: bool("is_trade_lc"),
-        country_gov_external_credit_rating: str("country_gov_external_credit_rating"),
-        country_gov_oecd_grade: values.country_gov_oecd_grade ? num("country_gov_oecd_grade") : undefined,
-        issuing_bank_rw: values.issuing_bank_rw ? num("issuing_bank_rw") : undefined,
-        is_bank_equiv_regulated: bool("is_bank_equiv_regulated"),
-      };
-    case "corp":
-      return {
-        external_credit_rating: str("external_credit_rating"),
-        short_grade: str("short_grade"),
-        is_sme_legal: bool("is_sme_legal"),
-        annual_revenue_eok: num("annual_revenue_eok"),
-        total_assets_eok: num("total_assets_eok"),
-        country_floor_rw: values.country_floor_rw ? numPct("country_floor_rw") : undefined,
-        debtor_short_rw: values.debtor_short_rw ? numPct("debtor_short_rw") : undefined,
-        pf_stage: str("pf_stage") || "operational",
-        pf_op_high_quality: bool("pf_op_high_quality"),
-        slotting_grade: str("slotting_grade"),
-        slotting_short_or_safe: bool("slotting_short_or_safe"),
-      };
-    case "realestate":
-      return {
-        ltv_ratio: values.ltv_ratio ? num("ltv_ratio") : undefined,
-        is_eligible: bool("is_eligible"),
-        borrower_risk_weight: values.borrower_risk_weight ? numPct("borrower_risk_weight") : undefined,
-        is_residential_exception: bool("is_residential_exception"),
-        has_construction_guarantee: bool("has_construction_guarantee"),
-        contractor_credit_rating: str("contractor_credit_rating"),
-        guarantor_exposure: values.guarantor_exposure ? num("guarantor_exposure") : undefined,
-      };
-    case "securitization":
-      return {
-        attachment_point: num("attachment_point"),
-        detachment_point: num("detachment_point"),
-        k_sa: num("k_sa"),
-        w: num("w"),
-        p: values.p !== undefined ? num("p") : 1.0,
-      };
-    default:
-      return {};
-  }
 }

@@ -1,9 +1,9 @@
 "use client";
 
-import { RwaResult } from "@/lib/api";
 import { formatKRW } from "@/lib/utils";
 import { TrendingUp, Scale, BookOpen, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { RwaResult } from "@/types/api";
 
 interface Props {
   result: RwaResult;

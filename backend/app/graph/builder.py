@@ -17,6 +17,7 @@ from functools import lru_cache
 from langgraph.graph import END, StateGraph
 
 from app.graph.state import GraphState
+from app.graph.utils import normalize_question_text
 from app.graph.nodes.classification_agent import classification_node
 from app.graph.nodes.regulation_agent import regulation_node
 from app.graph.nodes.calculation_agent import calculation_node
@@ -27,9 +28,7 @@ from app.graph.nodes.answer_agent import answer_node
 
 def normalize_node(state: GraphState) -> dict:
     """입력 질문 정규화. 불필요한 공백·줄바꿈 제거."""
-    raw = state.get("user_question", "").strip()
-    normalized = " ".join(raw.split())
-    return {"normalized_question": normalized}
+    return {"normalized_question": normalize_question_text(state.get("user_question", ""))}
 
 
 # ── 라우팅 함수 ────────────────────────────────────────────────────────────────
