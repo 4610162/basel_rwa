@@ -24,8 +24,6 @@ from tenacity import (
 
 from app.core.config import get_settings
 
-BATCH_SIZE = 5
-BATCH_SLEEP = 8  # seconds between embedding batches
 _warmup_lock = threading.Lock()
 _warmup_state = {
     "started": False,
@@ -231,7 +229,9 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
     if not all_texts:
         raise ValueError("청킹 결과가 비어 있습니다. Markdown 파일 내용을 확인하세요.")
 
-    total_batches = (len(all_texts) + BATCH_SIZE - 1) // BATCH_SIZE
+    batch_size = max(1, settings.embedding_batch_size)
+    batch_sleep = max(0, settings.embedding_batch_sleep_seconds)
+    total_batches = (len(all_texts) + batch_size - 1) // batch_size
 
     @retry(
         stop=stop_after_attempt(5),
@@ -243,13 +243,13 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
         return embedding_fn.embed_documents(texts)
 
     all_embeddings: list[list[float]] = []
-    for batch_idx, i in enumerate(range(0, len(all_texts), BATCH_SIZE), start=1):
-        batch_texts = all_texts[i : i + BATCH_SIZE]
+    for batch_idx, i in enumerate(range(0, len(all_texts), batch_size), start=1):
+        batch_texts = all_texts[i : i + batch_size]
         print(f"[RAG] 임베딩 중: 배치 {batch_idx}/{total_batches}")
         embeddings = _embed_batch(batch_texts)
         all_embeddings.extend(embeddings)
-        if i + BATCH_SIZE < len(all_texts):
-            time.sleep(BATCH_SLEEP)
+        if i + batch_size < len(all_texts):
+            time.sleep(batch_sleep)
 
     collection.add(
         ids=ids,

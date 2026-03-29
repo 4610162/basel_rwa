@@ -13,8 +13,10 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     collection_name: str = "basel3"
     rag_warmup_on_startup: bool = False
-    chunk_size: int = 700
-    chunk_overlap: int = 100
+    chunk_size: int = 1500
+    chunk_overlap: int = 150
+    embedding_batch_size: int = 20
+    embedding_batch_sleep_seconds: int = 15
     top_k: int = 5                          # global default (calculation mode fallback 등)
     primary_model: str = "gemini-2.5-flash"
     fallback_model: str = "gemini-2.0-flash"
