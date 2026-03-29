@@ -78,6 +78,10 @@ def _warm_rag_in_background():
 @app.on_event("startup")
 async def startup_event():
     """앱 시작 시 RAG 초기화를 백그라운드에서 시작한다."""
+    if not settings.rag_warmup_on_startup:
+        print("[Startup] RAG startup warmup is disabled.")
+        return
+
     app.state.rag_warmup_thread = threading.Thread(
         target=_warm_rag_in_background,
         name="rag-warmup",

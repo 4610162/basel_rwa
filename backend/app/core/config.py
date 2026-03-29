@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     chroma_db_path: str = "./chroma_db"
     data_dir: str = "./data"
     collection_name: str = "basel3"
+    rag_warmup_on_startup: bool = False
     chunk_size: int = 700
     chunk_overlap: int = 100
     top_k: int = 5                          # global default (calculation mode fallback 등)

@@ -25,7 +25,7 @@ from tenacity import (
 from app.core.config import get_settings
 
 BATCH_SIZE = 5
-BATCH_SLEEP = 3  # seconds between embedding batches
+BATCH_SLEEP = 8  # seconds between embedding batches
 _warmup_lock = threading.Lock()
 _warmup_state = {
     "started": False,
@@ -232,7 +232,7 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
 
     @retry(
         stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=4, max=60),
+        wait=wait_exponential(multiplier=3, min=10, max=120),
         retry=retry_if_exception_type(Exception),
         reraise=True,
     )
