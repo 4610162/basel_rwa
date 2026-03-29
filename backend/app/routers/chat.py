@@ -2,41 +2,164 @@
 채팅 라우터 — Basel III 세칙 RAG Q&A
 
 엔드포인트:
-  POST /stream         기존 RAG 직접 스트리밍 (하위 호환 유지)
-  POST /               기존 RAG 단일 응답 (하위 호환 유지)
-  POST /agent          LangGraph orchestration — JSON 응답
-  POST /agent/stream   LangGraph orchestration — SSE 스트리밍
+  POST /stream   모드 기반 통합 스트리밍
+                 mode = "agent"        : AI 규정·계산 (LangGraph 전체 파이프라인 — 규정검색·해석·계산 통합)
+                 mode = "data_analysis": AI 데이터분석 (식별자 기반 시계열 조회 + 시각화)
+
+마이그레이션 노트:
+  - "regulation" 모드는 제거됨. agent 모드가 regulation_only intent를 포함하여 처리.
+  - "calculation" 모드는 제거됨. agent 모드가 calculation intent를 포함하여 처리.
+  - 하위 호환: 구 mode 값("regulation", "calculation")은 model_validator에서 "agent"로 자동 변환.
 """
 from __future__ import annotations
 
 import json
 
 from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from app.schemas.chat import ChatRequest, ChatResponse, SourceDoc
-from app.core.rag_engine import retrieve_docs, stream_answer
+from app.routers.sse import create_sse_response, sse_data, sse_done
 
 router = APIRouter()
 
+# ── 요청 모델 ──────────────────────────────────────────────────────────────────
 
-# ── 기존 엔드포인트 (하위 호환 — 변경 없음) ───────────────────────────────────
+VALID_MODES = {"agent", "data_analysis"}
+
+
+class UnifiedChatRequest(BaseModel):
+    query: str = ""
+    question: str = ""          # agent mode 호환 (기존 프론트 payload)
+    history: list[dict] = []
+    mode: str = "agent"         # "agent" | "data_analysis"
+
+    @model_validator(mode="after")
+    def normalize(self) -> "UnifiedChatRequest":
+        self.query = (self.question or self.query).strip()
+        if not self.query:
+            raise ValueError("query 또는 question 필드가 필요합니다.")
+        # 구 모드 값("regulation", "calculation")은 "agent"로 안전하게 변환
+        if self.mode not in VALID_MODES:
+            self.mode = "agent"
+        return self
+
+
+# ── 통합 엔드포인트 ───────────────────────────────────────────────────────────
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest):
-    """기존: Server-Sent Events 방식으로 LLM 응답을 실시간 스트리밍."""
-    from app.services.rwa_intent import (
-        detect_calc_intent,
-        build_calc_guidance,
-        is_in_collection_flow,
-        get_flow_exposure_type,
-        accumulate_field_values,
-        get_missing_required_fields,
-        build_collection_response,
-        is_cancel_command,
+async def chat_stream(req: UnifiedChatRequest):
+    """
+    모드에 따라 실행 정책을 선택한다.
+
+    agent       → AI 규정·계산: LangGraph (분류 → 규정/계산 → 추론 → 답변) + DB 조회 지원
+    data_analysis → AI 데이터분석: AI Call#1 파싱 → 코드 SQL → AI Call#2 + 위젯 응답
+    """
+    if req.mode == "data_analysis":
+        return await _handle_data_analysis_stream(req.query, req.history)
+    return await _handle_agent_stream(req.query, req.history)
+
+
+# ── AI 데이터분석 모드 ────────────────────────────────────────────────────────
+
+async def _handle_data_analysis_stream(query: str, history: list[dict]):
+    """
+    AI 데이터분석 핸들러.
+
+    1. AI Call #1: 자연어 → DataQuerySpec (structured)
+    2. chart_type에 따라 분기:
+       - "line" (추이 분석): 기간별 시계열 조회 → line_chart + data_table
+       - "bar"  (비교 분석): 상품별 집계 조회  → bar_chart  + data_table
+    3. 요약 통계 생성
+    4. AI Call #2: 요약 통계 → 자연어 답변 스트리밍
+    5. 위젯 SSE 이벤트로 페이로드 전송
+    """
+    from app.services.data_analysis_service import (
+        PARSE_FAILURE_GUIDANCE,
+        ai_generate_answer,
+        ai_generate_comparison_answer,
+        ai_parse_query,
+        build_bar_chart_widget,
+        build_chart_widget,
+        build_comparison_stats,
+        build_comparison_table_widget,
+        build_summary_stats,
+        build_table_widget,
+        execute_comparison_query,
+        execute_query,
     )
-    from app.services.exposure_schema import get_schema
+
+    async def event_generator():
+        # ── AI Call #1 ─────────────────────────────────────────────────────────
+        spec = await ai_parse_query(query)
+
+        if spec is None:
+            yield sse_data({"type": "chunk", "text": PARSE_FAILURE_GUIDANCE})
+            yield sse_done()
+            return
+
+        yield sse_data({"type": "status", "text": "데이터를 조회하는 중입니다..."})
+
+        is_comparison = spec.chart_type == "bar" or spec.identifier_type == "all_products"
+
+        # ── DB 조회 ────────────────────────────────────────────────────────────
+        try:
+            if is_comparison:
+                rows = execute_comparison_query(spec)
+            else:
+                rows = execute_query(spec)
+        except Exception as e:
+            yield sse_data({"type": "chunk", "text": f"❌ 데이터 조회 중 오류: {e}"})
+            yield sse_done()
+            return
+
+        yield sse_data({"type": "status", "text": "분석 결과를 정리하는 중입니다..."})
+
+        # ── 요약 통계 + AI Call #2 ─────────────────────────────────────────────
+        try:
+            if is_comparison:
+                stats = build_comparison_stats(rows, spec)
+                async for text_chunk in ai_generate_comparison_answer(spec, stats):
+                    yield sse_data({"type": "chunk", "text": text_chunk})
+            else:
+                stats = build_summary_stats(rows, spec)
+                async for text_chunk in ai_generate_answer(spec, stats):
+                    yield sse_data({"type": "chunk", "text": text_chunk})
+        except Exception as e:
+            yield sse_data({"type": "chunk", "text": f"\n❌ 답변 생성 오류: {e}"})
+
+        # ── 위젯 페이로드 (데이터가 있을 때만) ────────────────────────────────
+        if rows:
+            if is_comparison:
+                widgets = [
+                    build_comparison_table_widget(rows, spec),
+                    build_bar_chart_widget(rows, spec),
+                ]
+            else:
+                widgets = [
+                    build_table_widget(rows, spec),
+                    build_chart_widget(rows, spec),
+                ]
+            yield sse_data({"type": "widgets", "widgets": widgets})
+
+        yield sse_done()
+
+    return create_sse_response(event_generator())
+
+
+# ── Agent 모드 (AI 규정·계산) ──────────────────────────────────────────────────
+
+async def _handle_agent_stream(question: str, history: list[dict]):
+    """
+    LangGraph 전체 파이프라인 핸들러 (AI 규정·계산 모드).
+
+    - 규정검색, 규정+계산, 순수계산, 명확화 요청 모두 처리
+    - 자연어 DB 조회 우선 처리 (단일 월 기준 — 시계열은 AI 데이터분석 모드 사용)
+    - pre-answer 그래프(분류 → 규정/계산 → 추론)를 ainvoke
+    - Gemini 스트리밍으로 최종 답변 실시간 전송
+    """
+    from app.core.rag_engine import retrieve_docs, stream_answer
+    from app.graph.builder import get_pre_answer_graph
+    from app.graph.nodes.answer_agent import stream_final_answer
     from app.services.db_nl_query_service import (
         build_db_query_help_text,
         detect_db_query_intent,
@@ -44,422 +167,80 @@ async def chat_stream(req: ChatRequest):
         run_natural_language_db_query,
     )
 
-    # ── 0. 취소/초기화 명령 — 세션 상태와 무관하게 최우선 처리 ──────────────
-    # (수집 중, 계산 완료 후, idle 어느 상태에서도 동작)
-    if is_cancel_command(req.query):
-        reset_text = (
-            "✅ 현재 계산 세션을 초기화했습니다.\n\n"
-            "새로 질문하거나 다시 계산을 시작할 수 있습니다.\n"
-            "예: \"기업 익스포져 RWA 계산하고 싶어\""
-        )
-
-        async def reset_event_generator():
-            payload = json.dumps(
-                {"type": "chunk", "text": reset_text}, ensure_ascii=False
-            )
-            yield f"data: {payload}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            reset_event_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # ── 1. 수집 흐름 진행 중인지 먼저 확인 ───────────────────────────────────
-    # (이전 assistant 메시지가 입력 안내이면 수집 흐름으로 처리)
-    if is_in_collection_flow(req.history):
-        from app.services.rwa_intent import classify_collection_message
-
-        exposure_type = get_flow_exposure_type(req.history)
-        schema = get_schema(exposure_type) if exposure_type else None
-
-        if schema:
-            # ── 1-a. 메시지 분류: 일반질문 / 계산입력
-            # (cancel은 step 0에서 이미 처리됨)
-            msg_class = classify_collection_message(req.query, schema)
-
-            # ── 1-b. 일반 규정 질문 → RAG 처리 + 세션 유지 노트 ─────────────
-            if msg_class == "general_question":
-                docs = retrieve_docs(req.query)
-
-                # 현재 수집 상태 파악 (현재 메시지는 필드 입력이 아니므로 history만 사용)
-                accumulated = accumulate_field_values(req.history, schema)
-                missing = get_missing_required_fields(accumulated, schema)
-
-                if missing:
-                    missing_labels = ", ".join(f.label for f in missing)
-                    # "입력 현황" 마커 포함 → 다음 메시지에서도 collection flow 유지
-                    session_note = (
-                        f"\n\n---\n"
-                        f"💡 **{schema.label} 입력 현황** | "
-                        f"남은 입력: **{missing_labels}**"
-                    )
-                else:
-                    session_note = (
-                        f"\n\n---\n"
-                        f"💡 **{schema.label} 입력 현황** | 모든 입력값 수집 완료"
-                    )
-
-                async def rag_with_session_note_generator():
-                    try:
-                        sources = [
-                            {"content": doc.page_content[:300], "metadata": dict(doc.metadata)}
-                            for doc in docs
-                        ]
-                        yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False, default=str)}\n\n"
-
-                        async for text_chunk in stream_answer(req.query, docs):
-                            payload = json.dumps(
-                                {"type": "chunk", "text": text_chunk}, ensure_ascii=False
-                            )
-                            yield f"data: {payload}\n\n"
-
-                        # 세션 유지 노트 전송 (마커 포함)
-                        note_payload = json.dumps(
-                            {"type": "chunk", "text": session_note}, ensure_ascii=False
-                        )
-                        yield f"data: {note_payload}\n\n"
-                        yield "data: [DONE]\n\n"
-
-                    except Exception as e:
-                        err_payload = json.dumps(
-                            {"type": "chunk", "text": f"\n❌ 스트리밍 오류: {e}"},
-                            ensure_ascii=False,
-                        )
-                        yield f"data: {err_payload}\n\n"
-                        yield "data: [DONE]\n\n"
-
-                return StreamingResponse(
-                    rag_with_session_note_generator(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-                )
-
-            # ── 1-c. 계산 입력값 → 기존 슬롯필링 로직 ───────────────────────
-            else:  # msg_class == "calc_input"
-                full_history = req.history + [{"role": "user", "content": req.query}]
-                accumulated = accumulate_field_values(full_history, schema)
-                missing = get_missing_required_fields(accumulated, schema)
-
-                if missing:
-                    response_text = build_collection_response(accumulated, missing, schema)
-                else:
-                    response_text = _run_chat_calculation(accumulated, schema, full_history)
-
-                async def collection_event_generator():
-                    payload = json.dumps(
-                        {"type": "chunk", "text": response_text}, ensure_ascii=False
-                    )
-                    yield f"data: {payload}\n\n"
-                    yield "data: [DONE]\n\n"
-
-                return StreamingResponse(
-                    collection_event_generator(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-                )
-
-    # ── 2. 자연어 DB조회 요청 감지 ───────────────────────────────────────────
-    if detect_db_query_intent(req.query):
-        db_result, used_latest = run_natural_language_db_query(req.query)
+    # DB 조회 우선 처리 (단순 단일 월 조회)
+    if detect_db_query_intent(question):
+        db_result, used_latest = run_natural_language_db_query(question)
         response_text = (
             format_db_query_response(db_result, used_latest)
             if db_result is not None
             else build_db_query_help_text()
         )
 
-        async def db_query_event_generator():
-            payload = json.dumps({"type": "chunk", "text": response_text}, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            db_query_event_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # ── 3. RWA 계산 의도 감지: 해당 시 안내 응답 즉시 반환 ──────────────────
-    if detect_calc_intent(req.query):
-        from app.services.db_lookup_service import (
-            detect_identifier,
-            lookup_exposure_from_db,
-            build_prefill_marker,
-        )
-        from app.services.rwa_field_parser import format_amount
-
-        # ── 2-a. 거래 식별자 감지 → DB 자동 조회 ─────────────────────────────
-        prefill_suffix = ""
-        identifier = detect_identifier(req.query)
-        if identifier:
-            id_type, id_value = identifier
-            id_label = "대출번호" if id_type == "loan_no" else "상품코드"
-            db_result = lookup_exposure_from_db(id_type, id_value)
-
-            if db_result and db_result["record_count"] == 1:
-                # 단일 레코드 — 익스포져 금액 자동 보완
-                exposure_display = format_amount(db_result["exposure"])
-                nm = db_result.get("product_code_nm", "")
-                nm_note = f", {nm}" if nm else ""
-                prefill_suffix = (
-                    f"\n\n> 📌 **DB 자동 조회 완료**"
-                    f" ({id_label} {id_value}, 기준월 {db_result['base_ym']}{nm_note})\n"
-                    f"> 익스포져 금액 **{exposure_display}**이 자동 적용됩니다."
-                    f" 아래 항목 중 익스포져 금액은 건너뛰고 나머지만 입력해주세요.\n"
-                    f"{build_prefill_marker(db_result)}"
-                )
-            elif db_result and db_result["record_count"] > 1:
-                # 복수 레코드 — 자동 보완 불가
-                prefill_suffix = (
-                    f"\n\n> ⚠️ {id_label} **{id_value}**에 해당하는 레코드가"
-                    f" {db_result['record_count']}건으로 익스포져 금액을 특정할 수 없습니다."
-                    f" 대출번호를 함께 입력하거나 익스포져 금액을 직접 입력해주세요.\n"
-                )
-            else:
-                # 조회 결과 없음 또는 CSV 없음
-                prefill_suffix = (
-                    f"\n\n> ⚠️ {id_label} **{id_value}**에 해당하는 데이터를"
-                    f" DB에서 찾을 수 없습니다. 익스포져 금액을 직접 입력해주세요.\n"
-                )
-
-        guidance = build_calc_guidance(req.query) + prefill_suffix
-
-        async def calc_event_generator():
-            payload = json.dumps({"type": "chunk", "text": guidance}, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            calc_event_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # ── 4. 기존 RAG 흐름 ──────────────────────────────────────────────────────
-    docs = retrieve_docs(req.query)
-
-    async def event_generator():
-        try:
-            sources = [
-                {"content": doc.page_content[:300], "metadata": dict(doc.metadata)}
-                for doc in docs
-            ]
-            yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False, default=str)}\n\n"
-
-            async for text_chunk in stream_answer(req.query, docs):
-                payload = json.dumps({"type": "chunk", "text": text_chunk}, ensure_ascii=False)
-                yield f"data: {payload}\n\n"
-
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            err_payload = json.dumps(
-                {"type": "chunk", "text": f"\n❌ 스트리밍 오류: {e}"}, ensure_ascii=False
-            )
-            yield f"data: {err_payload}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    """기존: 단일 요청-응답 (스트리밍 불필요한 경우)."""
-    docs = retrieve_docs(req.query)
-    full_answer = ""
-    async for chunk in stream_answer(req.query, docs):
-        full_answer += chunk
-
-    sources = [
-        SourceDoc(content=doc.page_content[:300], metadata=doc.metadata)
-        for doc in docs
-    ]
-    return ChatResponse(answer=full_answer, sources=sources)
-
-
-# ── LangGraph Agent 응답 스키마 ────────────────────────────────────────────────
-
-class AgentRequest(BaseModel):
-    question: str = ""
-    query: str = ""
-    history: list[dict] = []
-
-    @model_validator(mode="after")
-    def validate_question(self) -> "AgentRequest":
-        # Frontend legacy payload uses `query`; agent endpoints use `question`.
-        # Accept both so the API remains backward compatible.
-        self.question = (self.question or self.query).strip()
-        if not self.question:
-            raise ValueError("question 또는 query 필드가 필요합니다.")
-        return self
-
-
-class AgentResponse(BaseModel):
-    final_answer: str
-    intent: str = ""
-    exposure_type: str = ""
-    calc_result: dict | None = None
-    citations: list[str] = []
-    uncertainty_notes: list[str] = []
-    error: str | None = None
-
-
-def _run_agent_db_query(question: str) -> tuple[str | None, bool]:
-    """Agent Mode용 자연어 DB조회 응답을 생성한다."""
-    from app.services.db_nl_query_service import (
-        build_db_query_help_text,
-        detect_db_query_intent,
-        format_db_query_response,
-        run_natural_language_db_query,
-    )
-
-    if not detect_db_query_intent(question):
-        return None, False
-
-    db_result, used_latest = run_natural_language_db_query(question)
-    response_text = (
-        format_db_query_response(db_result, used_latest)
-        if db_result is not None
-        else build_db_query_help_text()
-    )
-    return response_text, True
-
-
-# ── LangGraph Agent 엔드포인트 ─────────────────────────────────────────────────
-
-@router.post("/agent", response_model=AgentResponse)
-async def chat_agent(req: AgentRequest):
-    """
-    LangGraph orchestration — JSON 응답.
-
-    graph.ainvoke()로 전체 워크플로를 실행하고 구조화된 결과를 반환한다.
-    classification → regulation/calculation → answer 순으로 실행.
-    """
-    from app.graph.builder import get_graph
-
-    db_response_text, handled = _run_agent_db_query(req.question)
-    if handled:
-        return AgentResponse(
-            final_answer=db_response_text or "",
-            intent="db_query",
-        )
-
-    graph = get_graph()
-    initial_state = _make_initial_state(req.question, req.history)
-
-    try:
-        result = await graph.ainvoke(initial_state)
-    except Exception as e:
-        return AgentResponse(
-            final_answer=f"워크플로 실행 중 오류가 발생했습니다: {e}",
-            error=str(e),
-        )
-
-    return AgentResponse(
-        final_answer=result.get("final_answer", ""),
-        intent=result.get("intent", ""),
-        exposure_type=result.get("exposure_type", ""),
-        calc_result=result.get("calc_result"),
-        citations=result.get("cited_rules", []),
-        uncertainty_notes=result.get("uncertainty_notes", []),
-        error=result.get("error"),
-    )
-
-
-@router.post("/agent/stream")
-async def chat_agent_stream(req: AgentRequest):
-    """
-    LangGraph orchestration — SSE 스트리밍 응답.
-
-    워크플로(classify → regulate → calculate → answer)를 ainvoke로 실행한 후,
-    기존 stream_answer()를 사용하여 최종 답변을 실시간 스트리밍한다.
-    """
-    from app.graph.builder import get_graph
-
-    db_response_text, handled = _run_agent_db_query(req.question)
-    if handled:
-        async def db_query_event_generator():
+        async def db_query_generator():
             meta = {"type": "meta", "intent": "db_query", "exposure_type": ""}
-            yield f"data: {json.dumps(meta, ensure_ascii=False, default=str)}\n\n"
-            yield f"data: {json.dumps({'type': 'sources', 'sources': []}, ensure_ascii=False, default=str)}\n\n"
-            payload = json.dumps({"type": "chunk", "text": db_response_text or ""}, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_data(meta)
+            yield sse_data({"type": "sources", "sources": []})
+            yield sse_data({"type": "chunk", "text": response_text or ""})
+            yield sse_done()
 
-        return StreamingResponse(
-            db_query_event_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return create_sse_response(db_query_generator())
 
-    graph = get_graph()
-    initial_state = _make_initial_state(req.question, req.history)
+    graph = get_pre_answer_graph()
+    initial_state = _make_initial_state(question, history)
 
     async def event_generator():
         try:
-            # ── 1단계: 전체 graph 실행 (classify + regulate + calculate + answer) ─
+            yield sse_data({"type": "status", "text": "질문을 분석하고 관련 규정을 찾는 중입니다..."})
+
             result = await graph.ainvoke(initial_state)
 
-            # ── 2단계: 메타 정보 전송 ────────────────────────────────────────────
+            # 메타 정보
+            uncertainty_notes: list[str] = []
+            if result.get("assumptions"):
+                uncertainty_notes.extend(f"가정: {a}" for a in result["assumptions"])
+            if result.get("validation_errors"):
+                uncertainty_notes.extend(f"계산 오류: {e}" for e in result["validation_errors"])
+            missing_fields = result.get("missing_fields", [])
+            if missing_fields and result.get("intent") != "clarification_needed":
+                uncertainty_notes.append(f"미확인 파라미터: {', '.join(missing_fields)}")
+
             meta = {
                 "type": "meta",
                 "intent": result.get("intent", ""),
                 "exposure_type": result.get("exposure_type", ""),
                 "calc_result": result.get("calc_result"),
                 "citations": result.get("cited_rules", []),
-                "uncertainty_notes": result.get("uncertainty_notes", []),
+                "reasoning": _extract_reasoning_payload(result),
+                "uncertainty_notes": uncertainty_notes,
             }
-            yield f"data: {json.dumps(meta, ensure_ascii=False, default=str)}\n\n"
+            yield sse_data(meta)
 
-            # ── 3단계: 소스 문서 전송 ────────────────────────────────────────────
+            # 소스 문서
             retrieved_docs = result.get("retrieved_docs", [])
             sources = [
                 {"content": d["content"][:300], "metadata": d.get("metadata", {})}
                 for d in retrieved_docs
             ]
-            yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False, default=str)}\n\n"
+            yield sse_data({"type": "sources", "sources": sources})
 
-            # ── 4단계: 답변 스트리밍 ─────────────────────────────────────────────
-            intent = result.get("intent", "")
-            final_answer = result.get("final_answer", "")
+            # 최종 답변 스트리밍
+            yield sse_data({"type": "status", "text": "추론 결과를 바탕으로 답변을 정리하는 중입니다..."})
 
-            if intent == "clarification_needed" or not retrieved_docs:
-                # clarification 또는 검색 결과 없음 → 이미 생성된 답변 전송
-                payload = json.dumps({"type": "chunk", "text": final_answer}, ensure_ascii=False)
-                yield f"data: {payload}\n\n"
-            else:
-                # 계산 결과를 반영한 강화 쿼리로 stream_answer 재실행
-                enriched_query = _build_enriched_query(req.question, result)
-                doc_objects = _dicts_to_fake_docs(retrieved_docs)
+            async for text_chunk in stream_final_answer(result):
+                yield sse_data({"type": "chunk", "text": text_chunk})
 
-                async for text_chunk in stream_answer(enriched_query, doc_objects):
-                    payload = json.dumps({"type": "chunk", "text": text_chunk}, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
-
-            yield "data: [DONE]\n\n"
+            yield sse_done()
 
         except Exception as e:
-            err_payload = json.dumps(
-                {"type": "chunk", "text": f"\n❌ Agent 스트리밍 오류: {e}"}, ensure_ascii=False
-            )
-            yield f"data: {err_payload}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_data({"type": "chunk", "text": f"\n❌ Agent 스트리밍 오류: {e}"})
+            yield sse_done()
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return create_sse_response(event_generator())
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
 
 def _make_initial_state(question: str, history: list[dict] | None = None) -> dict:
-    """graph.ainvoke()에 전달할 초기 상태를 생성한다."""
     return {
         "user_question": question,
         "normalized_question": "",
@@ -471,6 +252,7 @@ def _make_initial_state(question: str, history: list[dict] | None = None) -> dic
         "missing_fields": [],
         "regulation_path": [],
         "extracted_params": {},
+        "english_query": "",
         "retrieved_docs": [],
         "cited_rules": [],
         "applicable_tables": [],
@@ -479,6 +261,12 @@ def _make_initial_state(question: str, history: list[dict] | None = None) -> dic
         "intermediate_steps": [],
         "validation_errors": [],
         "assumptions": [],
+        "question_type": "",
+        "key_concepts": [],
+        "selected_rules": [],
+        "selected_formulas": [],
+        "reasoning_steps": [],
+        "answer_outline": [],
         "final_answer": "",
         "uncertainty_notes": [],
         "error": None,
@@ -486,121 +274,25 @@ def _make_initial_state(question: str, history: list[dict] | None = None) -> dic
 
 
 def _trim_agent_history(history: list[dict] | None, max_turns: int = 5) -> list[dict[str, str]]:
-    """최근 대화 max_turns개(사용자/어시스턴트 쌍)를 GraphState용으로 정리한다."""
     if not history:
         return []
-
-    max_messages = max_turns * 2
-    trimmed = history[-max_messages:]
+    trimmed = history[-(max_turns * 2):]
     cleaned: list[dict[str, str]] = []
-
     for item in trimmed:
         role = item.get("role")
         content = str(item.get("content", "")).strip()
         if role not in {"user", "assistant"} or not content:
             continue
         cleaned.append({"role": role, "content": content})
-
     return cleaned
 
 
-def _build_enriched_query(original_question: str, result: dict) -> str:
-    """
-    계산 결과를 포함한 강화된 쿼리 생성.
-    stream_answer()에 전달하여 계산 결과를 답변에 반영한다.
-    """
-    history_section = _format_history_for_query(result.get("conversation_history", []))
-    calc_result = result.get("calc_result")
-    if not calc_result:
-        return f"{history_section}\n\n[현재 질문]\n{original_question}" if history_section else original_question
-
-    calc_summary = (
-        f"\n\n[계산 결과]\n"
-        f"- 익스포져 유형: {calc_result.get('entity_type', 'N/A')}\n"
-        f"- 위험가중치: {calc_result.get('risk_weight_pct', 'N/A')}\n"
-        f"- RWA: {calc_result.get('rwa', 0):,.0f}원\n"
-        f"- 적용 근거: {calc_result.get('basis', 'N/A')}"
-    )
-    question_block = f"[현재 질문]\n{original_question}"
-    if history_section:
-        return f"{history_section}\n\n{question_block}{calc_summary}"
-    return question_block + calc_summary
-
-
-def _format_history_for_query(history: list[dict[str, str]]) -> str:
-    """stream_answer()용 최근 대화 맥락 문자열 생성."""
-    if not history:
-        return ""
-    lines = []
-    for item in history:
-        role = "사용자" if item.get("role") == "user" else "어시스턴트"
-        content = item.get("content", "").strip()
-        if content:
-            lines.append(f"- {role}: {content}")
-    if not lines:
-        return ""
-    return "[최근 대화 맥락]\n" + "\n".join(lines)
-
-
-class _FakeDoc:
-    """stream_answer()가 기대하는 .page_content 속성을 가진 경량 객체."""
-    def __init__(self, content: str):
-        self.page_content = content
-
-
-def _dicts_to_fake_docs(docs: list[dict]) -> list[_FakeDoc]:
-    """retrieved_docs dict 리스트 → stream_answer 호환 객체 변환."""
-    return [_FakeDoc(d["content"]) for d in docs]
-
-
-def _run_chat_calculation(
-    accumulated: dict[str, str],
-    schema,
-    history: list[dict] | None = None,
-) -> str:
-    """
-    수집된 필드값으로 RWA 계산을 실행하고 결과 마크다운을 반환한다.
-
-    계산기 재구현 없이 기존 calculate_rwa()를 재사용한다.
-    history가 전달되면 각 필드의 입력 출처(db/user)를 결과에 표시한다.
-    계산 불가(retail 등) 또는 오류 시 명확한 안내 문자열을 반환한다.
-    """
-    from app.services.chat_rwa_mapper import map_to_rwa_request, format_calc_result
-    from app.services.rwa_service import calculate_rwa
-
-    # retail은 계산기 미구현
-    if schema.category_id is None:
-        return (
-            f"### {schema.label} 입력 현황\n\n"
-            "> ✅ 입력 완료: 필수 입력값이 모두 수집되었습니다.\n\n"
-            f"⚠️ **{schema.label}** 유형은 현재 자동 계산 기능이 구현되어 있지 않습니다.\n"
-            "수집된 입력값을 계산기 탭에서 직접 확인해주세요."
-        )
-
-    # 입력 출처 딕셔너리 구성 (history 있을 때만)
-    sources: dict[str, str] = {}
-    if history:
-        from app.services.rwa_intent import build_field_sources
-        sources = build_field_sources(history, schema, accumulated)
-
-    try:
-        rwa_req = map_to_rwa_request(accumulated, schema)
-        result = calculate_rwa(rwa_req)
-        return format_calc_result(result, accumulated, schema, sources=sources)
-
-    except (ValueError, KeyError) as e:
-        return (
-            f"### {schema.label} 계산 오류\n\n"
-            f"❌ 입력값 처리 중 오류가 발생했습니다: {e}\n\n"
-            "입력값을 다시 확인하고 수정 후 재입력해주세요."
-        )
-    except NotImplementedError as e:
-        return (
-            f"### {schema.label} 계산 불가\n\n"
-            f"⚠️ 해당 계산 경로는 아직 구현되지 않았습니다: {e}"
-        )
-    except Exception as e:
-        return (
-            f"### {schema.label} 계산 오류\n\n"
-            f"❌ 예상치 못한 오류: {e}"
-        )
+def _extract_reasoning_payload(result: dict) -> dict:
+    return {
+        "question_type": result.get("question_type", ""),
+        "key_concepts": result.get("key_concepts", []),
+        "selected_rules": result.get("selected_rules", []),
+        "selected_formulas": result.get("selected_formulas", []),
+        "reasoning_steps": result.get("reasoning_steps", []),
+        "answer_outline": result.get("answer_outline", []),
+    }

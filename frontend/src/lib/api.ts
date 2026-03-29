@@ -4,6 +4,7 @@
  */
 import {
   ChatHistoryItem,
+  ChatMode,
   ChatStreamEvent,
   DbQueryRequest,
   DbQueryResponse,
@@ -15,6 +16,12 @@ const BASE_URL = "/api";
 
 export async function getBaseYmList(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/db-query/base-ym-list`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getProductCodeNmList(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/db-query/product-code-nm-list`);
   if (!res.ok) return [];
   return res.json();
 }
@@ -89,14 +96,8 @@ async function* streamSseJson(
 
 export async function* streamChat(
   query: string,
-  history: ChatHistoryItem[] = []
+  history: ChatHistoryItem[] = [],
+  mode: ChatMode = "agent"
 ): AsyncGenerator<ChatStreamEvent> {
-  yield* streamSseJson("/chat/stream", { query, history });
-}
-
-export async function* streamAgentChat(
-  query: string,
-  history: ChatHistoryItem[] = []
-): AsyncGenerator<ChatStreamEvent> {
-  yield* streamSseJson("/chat/agent/stream", { question: query, history });
+  yield* streamSseJson("/chat/stream", { query, history, mode });
 }

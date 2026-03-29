@@ -42,6 +42,10 @@ class GraphState(TypedDict):
     extracted_params: dict[str, Any]
     # RwaCalculationRequest로 직접 전달 가능한 파라미터 dict
 
+    english_query: str
+    # classification_node에서 번역된 영어 검색 질의 (한국어 질문인 경우에만 채워짐)
+    # regulation_node에서 translate API 호출을 생략하는 데 사용
+
     # ── Regulation Agent 출력 ─────────────────────────────────────────────────
     retrieved_docs: list[dict[str, Any]]
     # [{"content": str, "metadata": dict}, ...]
@@ -59,6 +63,14 @@ class GraphState(TypedDict):
 
     validation_errors: list[str]
     assumptions: list[str]
+
+    # ── Reasoning Layer 출력 ──────────────────────────────────────────────────
+    question_type: str
+    key_concepts: list[str]
+    selected_rules: list[str]
+    selected_formulas: list[str]
+    reasoning_steps: list[str]
+    answer_outline: list[str]
 
     # ── Answer Agent 출력 ─────────────────────────────────────────────────────
     final_answer: str

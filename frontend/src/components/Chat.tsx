@@ -6,32 +6,35 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { streamAgentChat, streamChat } from "@/lib/api";
+import { streamChat } from "@/lib/api";
+import {
+  CHAT_INPUT_PLACEHOLDER,
+  CHAT_MODE_OPTIONS,
+  CHAT_MODE_STATUS,
+} from "@/lib/chatConfig";
 import { preprocessMathContent } from "@/lib/chatMath";
 import { cn } from "@/lib/utils";
-import { SourceDoc } from "@/types/api";
+import { ChatMode, ChatRole, DataWidget, SourceDoc } from "@/types/api";
+import ChatInitialScreen from "@/components/ChatInitialScreen";
+import DataTable from "@/components/DataTable";
+import LineChart from "@/components/LineChart";
+import BarChart from "@/components/BarChart";
 
 interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: ChatRole;
   content: string;
+  status?: string;
   sources?: SourceDoc[];
+  widgets?: DataWidget[];
   streaming?: boolean;
 }
-
-const EXAMPLE_QUERIES = [
-  "중앙정부 익스포져의 위험가중치 기준은?",
-  "은행 실사등급(DD) A등급과 B등급의 차이는?",
-  "커버드본드 적격 요건은 무엇인가요?",
-  "프로젝트금융 무등급 시 위험가중치는?",
-  "SME(중소기업) 익스포져 우대 기준은?",
-];
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [useAgentMode, setUseAgentMode] = useState(false);
+  const [mode, setMode] = useState<ChatMode>("agent");
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -54,6 +57,7 @@ export default function Chat() {
       id: (Date.now() + 1).toString(),
       role: "assistant",
       content: "",
+      status: CHAT_MODE_STATUS[mode],
       streaming: true,
     };
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -61,21 +65,40 @@ export default function Chat() {
 
     try {
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      const stream = useAgentMode ? streamAgentChat : streamChat;
 
-      for await (const event of stream(query, history)) {
+      for await (const event of streamChat(query, history, mode)) {
         if (event.type === "sources") {
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, sources: event.sources } : m
+              m.id === assistantMsg.id
+                ? {
+                    ...m,
+                    sources: event.sources,
+                    status: m.content
+                      ? undefined
+                      : "추론 결과를 바탕으로 답변을 정리하는 중입니다...",
+                  }
+                : m
+            )
+          );
+        } else if (event.type === "status") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, status: event.text } : m
             )
           );
         } else if (event.type === "chunk") {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsg.id
-                ? { ...m, content: m.content + event.text }
+                ? { ...m, content: m.content + event.text, status: undefined }
                 : m
+            )
+          );
+        } else if (event.type === "widgets") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, widgets: event.widgets } : m
             )
           );
         }
@@ -105,36 +128,14 @@ export default function Chat() {
     }
   }
 
+  const placeholder = CHAT_INPUT_PLACEHOLDER[mode];
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div ref={messagesRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4 sm:px-4 space-y-5 sm:space-y-6">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-6 pb-20">
-            <div className="text-center">
-              <div className="w-14 h-14 rounded-2xl bg-brand-600/20 border border-brand-600/30 flex items-center justify-center mx-auto mb-4">
-                <BookOpen className="w-7 h-7 text-brand-400" />
-              </div>
-              <h2 className="text-xl font-semibold text-white mb-2">
-                Basel III RWA 챗봇
-              </h2>
-              <p className="text-slate-400 text-sm max-w-md">
-                은행업감독업무시행세칙 [별표 3] 원문을 기반으로 RWA 산출 관련 질문에
-                정확한 조항을 인용하여 답변합니다.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg">
-              {EXAMPLE_QUERIES.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => handleSubmit(q)}
-                  className="text-left text-sm px-4 py-3 rounded-xl bg-navy-800 border border-surface-border hover:border-brand-600/50 hover:bg-navy-700 text-slate-300 hover:text-white transition-all"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ChatInitialScreen onSubmit={handleSubmit} onModeChange={setMode} />
         )}
 
         {messages.map((msg) => (
@@ -145,22 +146,25 @@ export default function Chat() {
       {/* Input Area */}
       <div className="flex-none border-t border-surface-border bg-navy-800/50 px-3 py-3 sm:p-4 pb-safe">
         <div className="max-w-3xl mx-auto space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
-              Response Mode
-            </span>
-            <div className="relative">
-              <select
-                value={useAgentMode ? "agent" : "legacy"}
-                onChange={(e) => setUseAgentMode(e.target.value === "agent")}
-                className="appearance-none rounded-lg border border-surface-border bg-navy-900 pl-3 pr-9 py-2 text-sm text-slate-200 shadow-sm outline-none transition-colors hover:border-slate-500 focus:border-brand-600"
+          {/* Mode selector */}
+          <div className="flex items-center gap-2">
+            {CHAT_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => setMode(option.value)}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-all border",
+                  mode === option.value
+                    ? "bg-brand-600/20 border-brand-600/50 text-brand-300"
+                    : "border-surface-border text-slate-500 hover:text-slate-300 hover:border-slate-500"
+                )}
+                title={option.description}
               >
-                <option value="legacy">Legacy Mode</option>
-                <option value="agent">Agent Mode</option>
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-            </div>
+                {option.label}
+              </button>
+            ))}
           </div>
+
           <div className="flex gap-2 sm:gap-3 items-end">
             {messages.length > 0 && (
               <button
@@ -176,7 +180,7 @@ export default function Chat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="세칙 관련 질문을 입력하세요..."
+              placeholder={placeholder}
               rows={1}
               className="flex-1 resize-none bg-navy-900 border border-surface-border rounded-xl px-3 py-2.5 sm:px-4 sm:py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-600 transition-colors text-sm leading-relaxed min-h-[44px] max-h-32"
               style={{ height: "auto" }}
@@ -227,6 +231,7 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         ) : (
           <div className="space-y-3">
+            {/* Answer text bubble */}
             <div className="bg-navy-800 border border-surface-border rounded-2xl rounded-tl-sm px-5 py-4">
               {message.content ? (
                 <div className="prose-chat text-sm">
@@ -240,7 +245,7 @@ function MessageBubble({ message }: { message: Message }) {
               ) : (
                 <div className="flex items-center gap-2 text-slate-500 text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  답변 생성 중...
+                  {message.status || "답변 생성 중..."}
                 </div>
               )}
               {message.streaming && message.content && (
@@ -248,7 +253,20 @@ function MessageBubble({ message }: { message: Message }) {
               )}
             </div>
 
-            {/* Sources */}
+            {/* Data widgets (data_analysis mode) */}
+            {!message.streaming && message.widgets && message.widgets.length > 0 && (
+              <div className="space-y-3">
+                {message.widgets.map((widget, i) => (
+                  <div key={i}>
+                    {widget.type === "data_table" && <DataTable widget={widget} />}
+                    {widget.type === "line_chart" && <LineChart widget={widget} />}
+                    {widget.type === "bar_chart" && <BarChart widget={widget} />}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Sources (agent mode) */}
             {message.sources && message.sources.length > 0 && !message.streaming && (
               <div className="text-xs">
                 <button

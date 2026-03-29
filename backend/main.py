@@ -1,6 +1,7 @@
 """
 Basel III RWA Calculator — FastAPI Backend
 """
+import logging
 import threading
 
 from fastapi import FastAPI
@@ -11,6 +12,22 @@ from app.core.rag_engine import get_rag_status, warm_vectorstore
 from app.routers import chat, calculate, db_query
 
 settings = get_settings()
+
+
+def _configure_logging() -> None:
+    """애플리케이션 로그가 uvicorn 콘솔에도 보이도록 기본 로깅을 설정한다."""
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+        )
+        root_logger.addHandler(handler)
+
+
+_configure_logging()
 
 app = FastAPI(
     title="Basel III RWA Calculator API",

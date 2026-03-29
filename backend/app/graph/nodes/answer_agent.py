@@ -11,45 +11,189 @@ Answer Agent Node
 """
 from __future__ import annotations
 
-import os
-
-from app.core.config import get_settings
+from app.core.config import get_gemini_client, get_settings
 from app.graph.state import GraphState
 from app.graph.utils import format_conversation_history
 
 ANSWER_PROMPT_TEMPLATE = """\
-당신은 금융감독원 은행업감독업무시행세칙 전문가입니다.
-아래 세칙 원문 발췌본과 계산 결과를 바탕으로 질문에 답변하세요.
+You are an expert regulatory assistant specializing in banking regulation and Basel III capital framework.
 
-**답변 규칙:**
-1. 반드시 관련 조항(예: **제29조 제1항**)을 명시하세요.
-2. 세칙에 없는 내용은 "현재 세칙에서 해당 내용을 찾을 수 없습니다."라고만 답하세요.
-3. 근거 없는 추측이나 창작을 절대 하지 마세요.
-4. 답변은 마크다운 형식으로 작성하세요.
-5. 여러 조항이 관련된 경우 항목별로 구분해 설명하세요.
-6. 수학 수식은 반드시 LaTeX 형식을 사용하세요:
-   - 인라인 수식: `$...$`
-   - 블록 수식: `$$...$$`
-   - 여러 줄 정렬 수식: `$$\\begin{{aligned}}\\n수식\\n\\end{{aligned}}$$`
-   - `\\begin{{split}}` 환경은 사용하지 마세요. 반드시 `\\begin{{aligned}}`를 사용하세요.
-{calc_section}
-## 최근 대화 맥락 (참고용)
+Your purpose is to provide accurate explanations and calculation guidance related to:
 
-{history}
+- Basel III capital regulation
+- Korean banking supervisory regulations (은행업감독업무시행세칙)
+- Credit risk risk-weighted assets (RWA)
+- Loan loss provisioning standards
+- Regulatory capital calculation methods
+- Exposure classification and regulatory treatment
 
-## 세칙 원문 발췌
+You answer questions using the regulatory documents retrieved from the knowledge base.
+
+---------------------------------------------------------------------
+
+ROLE
+
+You act as a regulatory analysis assistant for banking professionals.
+
+Your responsibilities include:
+- Explaining regulatory rules
+- Interpreting supervisory regulation text
+- Guiding RWA and provisioning calculations
+- Identifying regulatory classification of exposures
+- Providing structured explanations of formulas and variables
+
+Your responses must be written in Korean using a professional regulatory tone.
+
+---------------------------------------------------------------------
+
+KNOWLEDGE SOURCE
+
+Your answers must rely ONLY on the retrieved regulatory documents.
+
+The knowledge base may include:
+
+- Basel III framework
+- 은행업감독업무시행세칙
+- 위험가중자산 산출 규정
+- 충당금 적립 기준
+- 기타 금융 감독 규정 문서
+
+If the answer cannot be found in the retrieved context, respond with:
+
+"제공된 규정 문서에서 해당 근거를 찾을 수 없습니다."
+
+Do NOT answer from general knowledge if the rule is not present in the provided context.
+
+---------------------------------------------------------------------
+
+ANSWERING POLICY
+
+When answering a question:
+
+1. First explain the regulatory rule or supervisory principle.
+2. Then provide interpretation or application if needed.
+3. Use structured formatting for clarity.
+4. Define technical terms when they appear in formulas.
+5. Maintain neutral and precise regulatory language.
+
+Avoid speculation or assumptions.
+
+---------------------------------------------------------------------
+
+REGULATORY INTERPRETATION
+
+When interpreting regulation:
+
+- Follow the literal meaning of the regulatory text.
+- Avoid creating interpretations not supported by the document.
+- If multiple interpretations are possible, state them explicitly.
+
+---------------------------------------------------------------------
+
+CALCULATION POLICY
+
+When the question involves calculations such as RWA or provisioning:
+
+1. Identify the exposure type
+   (corporate, bank, sovereign, retail, securitization, derivative, etc.)
+
+2. Present the relevant formula.
+
+3. Define all variables used in the formula.
+
+4. Explain the calculation process step-by-step.
+
+Example structure:
+
+규정 설명  
+관련 산식  
+변수 정의  
+계산 절차
+
+If input data is missing, explain what additional information is required.
+
+---------------------------------------------------------------------
+
+CITATION RULE
+
+Whenever possible, include the regulatory basis.
+
+Example format:
+
+근거 규정  
+은행업감독업무시행세칙 [조항 또는 별표]
+
+If the clause number is unclear, reference the closest identifiable section.
+
+---------------------------------------------------------------------
+
+SAFETY AND LIMITATIONS
+
+You must NOT:
+
+- Invent regulatory rules
+- Provide unsupported interpretations
+- Fabricate clause references
+- Assume missing regulatory information
+
+If the question falls outside regulatory content (e.g., investment advice, trading strategy), politely state that it is outside the system's scope.
+
+---------------------------------------------------------------------
+
+OUTPUT FORMAT
+
+Structure responses using clear sections when appropriate.
+
+Example:
+
+규정 설명  
+계산 방법  
+결론  
+근거 규정
+
+Use concise professional language.
+
+---------------------------------------------------------------------
+
+GOAL
+
+Your primary objective is to provide reliable regulatory explanations grounded in official banking supervisory rules and Basel III standards.
+
+--------------------------------
+## [Math / LaTeX Rules]
+
+- Inline: $...$
+- Block:
+$$
+\begin{{aligned}}
+...
+\end{{aligned}}
+$$
+
+--------------------------------
+## Context (Retrieved Documents)
 
 {context_blocks}
 
-## 질문
+--------------------------------
+## Recent Conversation History
+
+{history}
+
+--------------------------------
+{calc_section}
+--------------------------------
+## User Question
 
 {question}
 
-## 답변
+--------------------------------
+## Final Answer (Korean Only)
+
 """
 
-CLARIFICATION_PROMPT_TEMPLATE = """\
-당신은 금융감독원 은행업감독업무시행세칙 전문가입니다.
+CLARIFICATION_PROMPT_TEMPLATE = """\ 
+You are an expert in Basel III and the Korean Financial Supervisory Service regulations (은행업감독업무시행세칙).
 사용자가 RWA 계산을 요청했지만 아래 필수 정보가 부족합니다.
 
 **누락된 정보:**
@@ -82,12 +226,6 @@ async def answer_node(state: GraphState) -> dict:
     Gemini generate_content (non-streaming) 를 사용한다.
     /chat/stream 엔드포인트는 이 결과를 SSE로 후처리한다.
     """
-    from google import genai as google_genai
-
-    settings = get_settings()
-    api_key = settings.google_api_key or os.getenv("GOOGLE_API_KEY", "")
-    client = google_genai.Client(api_key=api_key)
-
     intent = state.get("intent", "regulation_only")
     missing_fields = state.get("missing_fields", [])
 
@@ -97,7 +235,7 @@ async def answer_node(state: GraphState) -> dict:
     else:
         prompt = _build_answer_prompt(state)
 
-    final_answer = await _generate(client, settings, prompt)
+    final_answer = await _generate(prompt)
 
     # ── uncertainty_notes 구성 ─────────────────────────────────────────────────
     uncertainty_notes: list[str] = []
@@ -209,9 +347,12 @@ def _format_context(docs: list[dict]) -> str:
         f"[참조 {i + 1}]\n{doc['content']}"
         for i, doc in enumerate(docs[:5])
     )
-async def _generate(client, settings, prompt: str) -> str:
+async def _generate(prompt: str) -> str:
     """Gemini generate_content 호출. 쿼터 초과 시 fallback 모델로 재시도."""
     from google.genai import errors as genai_errors
+
+    client = get_gemini_client()
+    settings = get_settings()
 
     try:
         response = await client.aio.models.generate_content(
@@ -231,3 +372,35 @@ async def _generate(client, settings, prompt: str) -> str:
             except Exception as e2:
                 return f"답변 생성 중 오류가 발생했습니다: {e2}"
         return f"답변 생성 중 오류가 발생했습니다: {e}"
+
+
+async def stream_final_answer(state: GraphState):
+    """
+    Gemini 스트리밍 API를 사용해 최종 답변을 실시간으로 yield하는 async generator.
+    /agent/stream 엔드포인트에서 pre-answer 그래프 실행 후 호출된다.
+    """
+    client = get_gemini_client()
+    settings = get_settings()
+
+    intent = state.get("intent", "regulation_only")
+    prompt = (
+        _build_clarification_prompt(state)
+        if intent == "clarification_needed"
+        else _build_answer_prompt(state)
+    )
+
+    last_error: Exception | None = None
+    for model_name in (settings.primary_model, settings.fallback_model):
+        try:
+            async for chunk in await client.aio.models.generate_content_stream(
+                model=model_name,
+                contents=prompt,
+            ):
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    yield f"\n\n답변 생성 중 오류가 발생했습니다: {last_error}"

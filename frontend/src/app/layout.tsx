@@ -3,8 +3,8 @@ import "./globals.css";
 import "katex/dist/katex.min.css";
 
 export const metadata: Metadata = {
-  title: "Basel III RWA Calculator",
-  description: "은행업감독업무시행세칙 기반 신용위험 RWA 산출 시스템 (표준방법, SA)",
+  title: "RWA AI Agent",
+  description: "Basel III 신용위험 RWA 분석 · 표준방법(SA) · 은행업감독업무시행세칙",
 };
 
 export const viewport: Viewport = {

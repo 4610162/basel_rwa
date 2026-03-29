@@ -2,26 +2,35 @@
 
 import { useState, useEffect } from "react";
 import { Search, RotateCcw, AlertCircle, InboxIcon } from "lucide-react";
-import {
-  queryDb,
-  getBaseYmList,
-} from "@/lib/api";
-import { formatBaseYm, formatRatioPercent, formatRoundedNumber } from "@/lib/utils";
+import { queryDb, getBaseYmList, getProductCodeNmList } from "@/lib/api";
+import { formatBaseYm, formatRatioPercent } from "@/lib/utils";
 import { DbQueryRequest, DbQueryResponse, DbQuerySummary, DbQueryRow } from "@/types/api";
+
+// ─── 헬퍼 ────────────────────────────────────────────────────────────────────
+
+/** 요약카드용: 억 원 단위 표시 */
+function formatEok(value: number): string {
+  return `${Math.round(value).toLocaleString("ko-KR")} 억 원`;
+}
+
+/** 테이블용: 숫자만 표시 */
+function formatNum(value: number): string {
+  return Math.round(value).toLocaleString("ko-KR");
+}
 
 // ─── 요약 카드 ────────────────────────────────────────────────────────────────
 
 function SummaryCard({ summary }: { summary: DbQuerySummary }) {
   const cards = [
     { label: "조회 건수", value: summary.record_count.toLocaleString("ko-KR") + " 건" },
-    { label: "총 BS잔액", value: formatRoundedNumber(summary.total_bs_balance) + " 원" },
-    { label: "총 EAD", value: formatRoundedNumber(summary.total_ead) + " 원" },
-    { label: "총 RWA", value: formatRoundedNumber(summary.total_rwa) + " 원" },
-    { label: "평균 RW율 (가중)", value: formatRatioPercent(summary.avg_rw) },
+    { label: "총 BS잔액", value: formatEok(summary.total_bs_balance) },
+    { label: "총 EAD", value: formatEok(summary.total_ead) },
+    { label: "총 RWA", value: formatEok(summary.total_rwa) },
+    { label: "평균 RW율 (EAD가중)", value: formatRatioPercent(summary.avg_rw) },
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
       {cards.map((c) => (
         <div
           key={c.label}
@@ -40,7 +49,10 @@ function SummaryCard({ summary }: { summary: DbQuerySummary }) {
 function DetailTable({ rows }: { rows: DbQueryRow[] }) {
   if (rows.length === 0) return null;
 
-  const headers = ["기준월", "대출번호", "영업상품코드", "BS잔액", "EAD", "RWA", "RW율"];
+  const headers = [
+    "기준월", "대출번호", "영업상품코드", "상품코드명",
+    "PD", "LGD", "CCF", "BS잔액", "EAD", "RWA", "RW율",
+  ];
 
   return (
     <div className="overflow-x-auto rounded-lg border border-surface-border">
@@ -60,9 +72,13 @@ function DetailTable({ rows }: { rows: DbQueryRow[] }) {
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{formatBaseYm(row.base_ym)}</td>
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{row.loan_no}</td>
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{row.product_code}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.bs_balance)}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.ead)}</td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRoundedNumber(row.rwa)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-slate-300">{row.product_code_nm}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRatioPercent(row.pd)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRatioPercent(row.lgd)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRatioPercent(row.ccf)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatNum(row.bs_balance)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatNum(row.ead)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatNum(row.rwa)}</td>
               <td className="px-4 py-2.5 whitespace-nowrap text-right text-slate-300">{formatRatioPercent(row.rw)}</td>
             </tr>
           ))}
@@ -74,32 +90,35 @@ function DetailTable({ rows }: { rows: DbQueryRow[] }) {
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
-const INITIAL_FORM: DbQueryRequest = {
-  query_type: "loan_no",
+interface FormState {
+  base_ym: string;
+  product_code_nm: string;
+  product_code: string;
+  loan_no: string;
+}
+
+const INITIAL_FORM: FormState = {
   base_ym: "",
-  loan_no: "",
+  product_code_nm: "",
   product_code: "",
+  loan_no: "",
 };
 
 export default function DbQuery() {
-  const [form, setForm] = useState<DbQueryRequest>(INITIAL_FORM);
+  const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [baseYmOptions, setBaseYmOptions] = useState<string[]>([]);
+  const [productCodeNmOptions, setProductCodeNmOptions] = useState<string[]>([]);
   const [result, setResult] = useState<DbQueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 컴포넌트 마운트 시 기준월 목록 fetch
   useEffect(() => {
-    getBaseYmList().then((list) => {
-      setBaseYmOptions(list);
-      if (list.length > 0) {
-        setForm((f) => ({ ...f, base_ym: list[0] }));
-      }
-    });
+    getBaseYmList().then(setBaseYmOptions);
+    getProductCodeNmList().then(setProductCodeNmOptions);
   }, []);
 
   function handleReset() {
-    setForm({ ...INITIAL_FORM, base_ym: baseYmOptions[0] ?? "" });
+    setForm(INITIAL_FORM);
     setResult(null);
     setError(null);
   }
@@ -112,10 +131,10 @@ export default function DbQuery() {
 
     try {
       const req: DbQueryRequest = {
-        query_type: form.query_type,
         base_ym: form.base_ym,
-        loan_no: form.query_type === "loan_no" ? (form.loan_no || null) : null,
-        product_code: form.query_type === "product_code" ? (form.product_code || null) : null,
+        loan_no: form.loan_no || null,
+        product_code: form.product_code || null,
+        product_code_nm: form.product_code_nm || null,
       };
       const res = await queryDb(req);
       setResult(res);
@@ -126,8 +145,6 @@ export default function DbQuery() {
     }
   }
 
-  const isSubmitDisabled = loading || !form.base_ym;
-
   return (
     <div className="h-full overflow-y-auto bg-navy-950">
       <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
@@ -135,93 +152,74 @@ export default function DbQuery() {
         <div className="bg-navy-900 border border-surface-border rounded-xl p-5">
           <h2 className="text-white font-semibold text-base mb-4">조회 조건</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* 조회 기준 선택 */}
-            <div>
-              <label className="block text-slate-400 text-xs mb-2">조회 기준</label>
-              <div className="flex gap-3">
-                {(["loan_no", "product_code"] as const).map((type) => (
-                  <label
-                    key={type}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg border cursor-pointer text-sm transition-all ${
-                      form.query_type === type
-                        ? "border-brand-600 bg-brand-600/10 text-brand-400"
-                        : "border-surface-border text-slate-400 hover:border-slate-500"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      className="hidden"
-                      value={type}
-                      checked={form.query_type === type}
-                      onChange={() =>
-                        setForm((f) => ({ ...f, query_type: type, loan_no: "", product_code: "" }))
-                      }
-                    />
-                    {type === "loan_no" ? "대출번호 기준" : "영업상품코드 기준"}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* 입력 필드 */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* 기준월 드롭다운 */}
+
+              {/* 기준월 */}
               <div>
-                <label className="block text-slate-400 text-xs mb-1.5">
-                  기준월 <span className="text-red-400">*</span>
-                </label>
+                <label className="block text-slate-400 text-xs mb-1.5">기준월</label>
                 <select
                   value={form.base_ym}
                   onChange={(e) => setForm((f) => ({ ...f, base_ym: e.target.value }))}
                   className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500 transition-colors"
-                  required
                 >
-                  {baseYmOptions.length === 0 && (
-                    <option value="" disabled>불러오는 중...</option>
-                  )}
+                  <option value="">전체</option>
                   {baseYmOptions.map((ym) => (
-                    <option key={ym} value={ym}>
-                      {ym}
-                    </option>
+                    <option key={ym} value={ym}>{ym}</option>
                   ))}
                 </select>
               </div>
 
-              {/* 대출번호 or 영업상품코드 (선택 입력) */}
-              {form.query_type === "loan_no" ? (
-                <div>
-                  <label className="block text-slate-400 text-xs mb-1.5">
-                    대출번호 <span className="text-slate-600">(선택)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="미입력 시 전체 조회"
-                    value={form.loan_no ?? ""}
-                    onChange={(e) => setForm((f) => ({ ...f, loan_no: e.target.value }))}
-                    className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 transition-colors"
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-slate-400 text-xs mb-1.5">
-                    영업상품코드 <span className="text-slate-600">(선택)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="미입력 시 전체 조회"
-                    value={form.product_code ?? ""}
-                    onChange={(e) => setForm((f) => ({ ...f, product_code: e.target.value }))}
-                    className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 transition-colors"
-                  />
-                </div>
-              )}
+              {/* 영업상품코드명 — 드롭다운 */}
+              <div>
+                <label className="block text-slate-400 text-xs mb-1.5">
+                  영업상품코드명 <span className="text-slate-600">(선택)</span>
+                </label>
+                <select
+                  value={form.product_code_nm}
+                  onChange={(e) => setForm((f) => ({ ...f, product_code_nm: e.target.value }))}
+                  className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500 transition-colors"
+                >
+                  <option value="">전체</option>
+                  {productCodeNmOptions.map((nm) => (
+                    <option key={nm} value={nm}>{nm}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 영업상품코드 */}
+              <div>
+                <label className="block text-slate-400 text-xs mb-1.5">
+                  영업상품코드 <span className="text-slate-600">(선택)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="미입력 시 전체 조회"
+                  value={form.product_code}
+                  onChange={(e) => setForm((f) => ({ ...f, product_code: e.target.value }))}
+                  className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 transition-colors"
+                />
+              </div>
+
+              {/* 대출번호 */}
+              <div>
+                <label className="block text-slate-400 text-xs mb-1.5">
+                  대출번호 <span className="text-slate-600">(선택)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="미입력 시 전체 조회"
+                  value={form.loan_no}
+                  onChange={(e) => setForm((f) => ({ ...f, loan_no: e.target.value }))}
+                  className="w-full bg-navy-800 border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 transition-colors"
+                />
+              </div>
             </div>
 
             {/* 버튼 */}
             <div className="flex gap-2 pt-1">
               <button
                 type="submit"
-                disabled={isSubmitDisabled}
+                disabled={loading}
                 className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 <Search className="w-4 h-4" />

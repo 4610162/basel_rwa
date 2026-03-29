@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.db_query import DbQueryRequest, DbQueryResponse
-from app.services.db_query_service import execute_db_query, get_base_ym_list
+from app.services.db_query_service import execute_db_query, get_base_ym_list, get_product_code_nm_list
 
 router = APIRouter()
 
@@ -16,13 +16,21 @@ async def base_ym_list() -> list[str]:
         raise HTTPException(status_code=500, detail=f"기준월 목록 조회 오류: {str(e)}")
 
 
+@router.get("/product-code-nm-list", response_model=list[str])
+async def product_code_nm_list() -> list[str]:
+    """CSV에서 distinct 영업상품코드명 목록을 반환한다. (가나다순)"""
+    try:
+        return get_product_code_nm_list()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"상품코드명 목록 조회 오류: {str(e)}")
+
+
 @router.post("", response_model=DbQueryResponse)
 async def db_query(req: DbQueryRequest) -> DbQueryResponse:
     """
     CSV 데이터를 DuckDB로 조회한다.
-    - query_type: "loan_no" | "product_code"
-    - base_ym: YYYY-MM 형식 (필수)
-    - loan_no / product_code: 미입력 시 해당 기준월 전체 조회
+    - base_ym: YYYY-MM 형식 또는 "" (전체 기간)
+    - loan_no / product_code / product_code_nm: 각각 독립 필터 (미입력 시 생략)
     """
     try:
         return execute_db_query(req)

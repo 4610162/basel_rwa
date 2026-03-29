@@ -8,15 +8,27 @@ Regulation Agent Node
 """
 from __future__ import annotations
 
+import asyncio
+
 from app.graph.state import GraphState
 
 
-def regulation_node(state: GraphState) -> dict:
+async def regulation_node(state: GraphState) -> dict:
     """
-    LangGraph Node: 규정 조문 검색.
-    기존 retrieve_docs() 함수를 그대로 재사용한다.
+    LangGraph Node: 규정 조문 검색 (agent 모드 전용).
+    retrieve_docs()는 blocking I/O(ChromaDB + 임베딩)이므로
+    asyncio.to_thread()로 래핑하여 이벤트 루프 블로킹을 방지한다.
+
+    reranker_enabled=True 시: top_k 넓게 검색 → cross-encoder reranker → top_n 선택.
+    reranker_enabled=False 시: 기존 동작 유지.
     """
+    import logging
+
+    from app.core.config import get_settings
     from app.core.rag_engine import retrieve_docs
+
+    logger = logging.getLogger(__name__)
+    settings = get_settings()
 
     question = state.get("normalized_question") or state["user_question"]
     regulation_path = state.get("regulation_path", [])
@@ -27,8 +39,23 @@ def regulation_node(state: GraphState) -> dict:
     else:
         enhanced_query = question
 
+    # reranker 활성화 시 더 넓은 top_k로 후보 확보
+    retriever_k = (
+        settings.agent_retriever_top_k
+        if settings.reranker_enabled
+        else settings.top_k
+    )
+
+    # classification_node에서 이미 번역된 영어 질의를 재사용 → translate API 호출 생략
+    english_query = state.get("english_query") or None
+
     try:
-        docs = retrieve_docs(enhanced_query)
+        docs = await asyncio.to_thread(
+            retrieve_docs,
+            enhanced_query,
+            k=retriever_k,
+            translated_query=english_query,
+        )
     except Exception as e:
         return {
             "retrieved_docs": [],
@@ -37,6 +64,33 @@ def regulation_node(state: GraphState) -> dict:
             "exceptions": [],
             "error": f"규정 검색 오류: {e}",
         }
+
+    logger.info(
+        f"[RegulationNode] retrieved={len(docs)} "
+        f"reranker_enabled={settings.reranker_enabled}"
+    )
+
+    # Reranker: 후보 문서 재정렬 → 상위 top_n 선택 (agent 모드 설정 사용)
+    if not settings.reranker_enabled:
+        logger.info("[RegulationNode] reranker skipped | reason=disabled")
+    elif len(docs) <= settings.agent_reranker_top_n:
+        logger.info(
+            f"[RegulationNode] reranker skipped | reason=insufficient_candidates "
+            f"candidates={len(docs)} top_n={settings.agent_reranker_top_n}"
+        )
+    else:
+        logger.info(
+            f"[RegulationNode] reranker executing | candidates={len(docs)} "
+            f"top_n={settings.agent_reranker_top_n}"
+        )
+        from app.core.reranker import rerank_docs
+        docs = await rerank_docs(
+            enhanced_query,
+            docs,
+            top_n=settings.agent_reranker_top_n,
+        )
+
+    logger.info(f"[RegulationNode] final_docs={len(docs)}")
 
     # Document 객체 → dict 직렬화 (GraphState 호환)
     retrieved_docs = [

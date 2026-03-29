@@ -5,10 +5,12 @@ LangGraph 워크플로 조립 — Basel III Agent Graph
     START
       → normalize_node
       → classification_node
-      → [conditional] regulation_only     → regulation_node → answer_node → END
-                       calculation_only   → calculation_node → answer_node → END
+      → [conditional] regulation_only       → regulation_node → answer_node → END
+                       calculation_only     → calculation_node → answer_node → END
                        regulation_plus_calc → regulation_node → calculation_node → answer_node → END
                        clarification_needed → answer_node → END
+
+※ reasoning은 answer_node 프롬프트 내부에 Step 1~5로 통합됨 (별도 LLM 호출 없음)
 """
 from __future__ import annotations
 
@@ -64,6 +66,11 @@ def _route_after_regulation(state: GraphState) -> str:
     return "answer_agent"
 
 
+def _route_after_calculation(state: GraphState) -> str:
+    """calculation_node 이후 answer_agent로 이동한다."""
+    return "answer_agent"
+
+
 # ── 그래프 조립 ────────────────────────────────────────────────────────────────
 
 def build_graph():
@@ -82,7 +89,6 @@ def build_graph():
 
     # 고정 엣지
     workflow.add_edge("normalize", "classification_agent")
-    workflow.add_edge("calculation_agent", "answer_agent")
     workflow.add_edge("answer_agent", END)
 
     # 조건부 엣지: classification → 분기
@@ -106,6 +112,14 @@ def build_graph():
         },
     )
 
+    workflow.add_conditional_edges(
+        "calculation_agent",
+        _route_after_calculation,
+        {
+            "answer_agent": "answer_agent",
+        },
+    )
+
     return workflow.compile()
 
 
@@ -113,3 +127,58 @@ def build_graph():
 def get_graph():
     """컴파일된 그래프 singleton 반환."""
     return build_graph()
+
+
+def build_pre_answer_graph():
+    """
+    answer_node를 제외하고 classify → regulate/calculate까지만 실행하는 그래프.
+    /agent/stream 엔드포인트에서 Gemini 스트리밍 전 전처리용으로 사용.
+
+    clarification_needed → END
+    그 외 → regulation/calculation → END
+    """
+    workflow = StateGraph(GraphState)
+
+    workflow.add_node("normalize", normalize_node)
+    workflow.add_node("classification_agent", classification_node)
+    workflow.add_node("regulation_agent", regulation_node)
+    workflow.add_node("calculation_agent", calculation_node)
+
+    workflow.set_entry_point("normalize")
+    workflow.add_edge("normalize", "classification_agent")
+
+    # answer_agent 자리에 END로 매핑
+    workflow.add_conditional_edges(
+        "classification_agent",
+        _route_after_classification,
+        {
+            "regulation_agent": "regulation_agent",
+            "calculation_agent": "calculation_agent",
+            "answer_agent": END,
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "regulation_agent",
+        _route_after_regulation,
+        {
+            "calculation_agent": "calculation_agent",
+            "answer_agent": END,
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "calculation_agent",
+        _route_after_calculation,
+        {
+            "answer_agent": END,
+        },
+    )
+
+    return workflow.compile()
+
+
+@lru_cache(maxsize=1)
+def get_pre_answer_graph():
+    """pre-answer 그래프 singleton 반환."""
+    return build_pre_answer_graph()

@@ -56,6 +56,12 @@ _REGULATORY_QUESTION_KEYWORDS = [
     "무엇인가", "무엇이", "어떤 경우", "어떤경우",
 ]
 
+_EXPLANATION_REQUEST_KEYWORDS = [
+    "알려줘", "알려주세요", "설명해줘", "설명해주세요",
+    "기준", "근거", "요건", "조건", "정의", "해석",
+    "언제", "경우", "경우에", "경우엔", "왜", "차이",
+]
+
 # ── 익스포져 유형 감지 키워드 ─────────────────────────────────────────────────
 EXPOSURE_KEYWORDS: dict[str, list[str]] = {
     "corporate": [
@@ -224,15 +230,21 @@ def detect_calc_intent(query: str) -> bool:
     has_calc = any(kw in q for kw in ["계산", "산출", "구하", "필요", "입력"])
 
     direct_phrases = [
-        "rwa계산", "rwa산출", "위험가중자산계산", "위험가중치계산",
+        "rwa계산", "위험가중자산계산", "위험가중치계산",
         "계산하고싶", "계산해줘", "계산하려면", "계산방법",
         "계산하는방법", "어떻게계산", "뭐가필요", "무엇이필요",
         "필수입력", "입력값", "입력이뭐", "입력뭐",
         # 새 계산 시작 의도 (초기화/취소 후 재진입)
         "새계산", "새로운계산", "새계산시작", "다른계산", "다른익스포져",
     ]
-    if any(p in q_nospace for p in direct_phrases):
+    has_direct_calc_phrase = any(p in q_nospace for p in direct_phrases)
+    if has_direct_calc_phrase:
         return True
+
+    # 설명/규정 질문은 legacy 기본 RAG로 우선 보낸다.
+    # 단, "계산해줘", "입력값", "계산하려면" 같은 명시적 계산 시작 문구는 위에서 이미 허용했다.
+    if is_general_question(query) or _looks_like_explanation_request(q):
+        return False
 
     if has_rwa and has_calc:
         return True
@@ -246,6 +258,17 @@ def detect_calc_intent(query: str) -> bool:
         return True
 
     return False
+
+
+def _looks_like_explanation_request(query_lower: str) -> bool:
+    """
+    규정/기준 설명 요청으로 보이는 표현을 감지한다.
+
+    예:
+    - "부도차주인 경우 rwa 산출 기준 알려줘"
+    - "무등급 기업 익스포져 위험가중치 근거가 뭐야"
+    """
+    return any(keyword in query_lower for keyword in _EXPLANATION_REQUEST_KEYWORDS)
 
 
 def detect_exposure_type(query: str) -> str | None:
