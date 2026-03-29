@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     collection_name: str = "basel3"
     rag_warmup_on_startup: bool = False
-    chunk_size: int = 1500
+    chunk_size: int = 1000
     chunk_overlap: int = 150
     embedding_batch_size: int = 20
     embedding_batch_sleep_seconds: int = 15

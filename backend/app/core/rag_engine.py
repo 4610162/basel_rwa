@@ -144,6 +144,24 @@ def _collection_has_legacy_docs(collection) -> bool:
     return any(not metadata or "source_path" not in metadata for metadata in metadatas)
 
 
+def _collection_needs_rechunk(collection) -> bool:
+    """현재 설정과 다른 chunk 기준으로 만들어진 인덱스면 재구축이 필요하다."""
+    settings = get_settings()
+    if collection.count() == 0:
+        return False
+
+    payload = collection.get(include=["metadatas"])
+    metadatas = payload.get("metadatas") or []
+    for metadata in metadatas:
+        if not metadata:
+            continue
+        if metadata.get("chunk_size") != settings.chunk_size:
+            return True
+        if metadata.get("chunk_overlap") != settings.chunk_overlap:
+            return True
+    return False
+
+
 def _sync_vectorstore(chroma_client, embedding_fn) -> None:
     """data/*.md 전체를 기준으로 신규 파일만 컬렉션에 추가한다."""
     settings = get_settings()
@@ -160,6 +178,15 @@ def _sync_vectorstore(chroma_client, embedding_fn) -> None:
 
     if _collection_has_legacy_docs(collection):
         print("[RAG] 기존 단일 문서 인덱스를 감지하여 전체 Markdown 파일로 재구축합니다.")
+        _build_vectorstore(chroma_client, embedding_fn, md_files)
+        return
+
+    if _collection_needs_rechunk(collection):
+        print(
+            f"[RAG] chunk 설정 변경 감지 (size={settings.chunk_size}, overlap={settings.chunk_overlap}). "
+            "전체 Markdown 파일로 재구축합니다.",
+            flush=True,
+        )
         _build_vectorstore(chroma_client, embedding_fn, md_files)
         return
 
@@ -212,10 +239,11 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
 
     for md_path in md_files:
         resolved_path = str(md_path.resolve())
-        print(f"[RAG] {md_path} 로딩 및 청킹 시작...")
+        print(f"[RAG] {md_path} 로딩 및 청킹 시작...", flush=True)
         loader = UnstructuredMarkdownLoader(str(md_path))
         docs = loader.load()
         chunks = splitter.split_documents(docs)
+        print(f"[RAG] {md_path.name} 청킹 완료: {len(chunks)}개 청크", flush=True)
 
         source_key = md_path.stem.replace(" ", "_")
         for chunk_idx, chunk in enumerate(chunks):
@@ -223,6 +251,8 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
             metadata = dict(chunk.metadata or {})
             metadata["source_path"] = resolved_path
             metadata["source_file"] = md_path.name
+            metadata["chunk_size"] = settings.chunk_size
+            metadata["chunk_overlap"] = settings.chunk_overlap
             all_metadatas.append(metadata)
             ids.append(f"{source_key}:chunk_{chunk_idx}")
 
@@ -245,19 +275,29 @@ def _add_files_to_collection(collection, embedding_fn, md_files: list[Path]) -> 
     all_embeddings: list[list[float]] = []
     for batch_idx, i in enumerate(range(0, len(all_texts), batch_size), start=1):
         batch_texts = all_texts[i : i + batch_size]
-        print(f"[RAG] 임베딩 중: 배치 {batch_idx}/{total_batches}")
+        print(
+            f"[RAG] 임베딩 중: 배치 {batch_idx}/{total_batches} "
+            f"(청크 {i + 1}-{min(i + batch_size, len(all_texts))}/{len(all_texts)})",
+            flush=True,
+        )
         embeddings = _embed_batch(batch_texts)
         all_embeddings.extend(embeddings)
+        print(f"[RAG] 임베딩 완료: 배치 {batch_idx}/{total_batches}", flush=True)
         if i + batch_size < len(all_texts):
+            print(f"[RAG] 다음 배치 전 {batch_sleep}초 대기", flush=True)
             time.sleep(batch_sleep)
 
+    print("[RAG] ChromaDB 저장 시작...", flush=True)
     collection.add(
         ids=ids,
         embeddings=all_embeddings,
         documents=all_texts,
         metadatas=all_metadatas,
     )
-    print(f"[RAG] 임베딩 반영 완료! 총 {len(md_files)}개 파일, {len(all_texts)}개 청크 저장.")
+    print(
+        f"[RAG] 임베딩 반영 완료! 총 {len(md_files)}개 파일, {len(all_texts)}개 청크 저장.",
+        flush=True,
+    )
 
 
 # ── 검색 ───────────────────────────────────────────────────────────────────────
