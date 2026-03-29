@@ -1,7 +1,9 @@
 """
 Application configuration via environment variables.
 """
+import os
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +39,29 @@ class Settings(BaseSettings):
     reranker_max_length: int = 512
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def app_base_dir(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    @property
+    def resolved_data_dir(self) -> str:
+        data_dir = Path(self.data_dir)
+        if data_dir.is_absolute():
+            return str(data_dir)
+        return str((self.app_base_dir / data_dir).resolve())
+
+    @property
+    def resolved_chroma_db_path(self) -> str:
+        chroma_path = Path(self.chroma_db_path)
+        if chroma_path.is_absolute():
+            return str(chroma_path)
+
+        railway_volume = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+        if railway_volume:
+            return str((Path(railway_volume) / chroma_path.name).resolve())
+
+        return str((self.app_base_dir / chroma_path).resolve())
 
 
 @lru_cache

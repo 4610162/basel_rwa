@@ -53,7 +53,10 @@ def get_embedding_model():
 @lru_cache(maxsize=1)
 def get_chroma_client():
     settings = get_settings()
-    return chromadb.PersistentClient(path=settings.chroma_db_path)
+    db_path = settings.resolved_chroma_db_path
+    Path(db_path).mkdir(parents=True, exist_ok=True)
+    print(f"[RAG] ChromaDB path: {db_path}")
+    return chromadb.PersistentClient(path=db_path)
 
 
 # ── 벡터스토어 ─────────────────────────────────────────────────────────────────
@@ -107,7 +110,7 @@ def get_rag_status() -> dict[str, str | bool | None]:
 
 def _is_vectorstore_empty() -> bool:
     settings = get_settings()
-    db_path = Path(settings.chroma_db_path)
+    db_path = Path(settings.resolved_chroma_db_path)
     if not db_path.exists():
         return True
     return not any(db_path.iterdir())
@@ -115,7 +118,7 @@ def _is_vectorstore_empty() -> bool:
 
 def _list_markdown_files() -> list[Path]:
     settings = get_settings()
-    data_dir = Path(settings.data_dir)
+    data_dir = Path(settings.resolved_data_dir)
     if not data_dir.exists():
         raise FileNotFoundError(f"data 디렉터리를 찾을 수 없습니다: {data_dir.resolve()}")
 
