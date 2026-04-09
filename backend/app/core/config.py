@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     embedding_batch_sleep_seconds: int = 15
     top_k: int = 5                          # global default (calculation mode fallback 등)
     primary_model: str = "gemini-2.5-flash"
-    fallback_model: str = "gemini-3-flash-preview"
+    fallback_model: str = "gemini-2.5-flash"
     cors_origins: list[str] = ["http://localhost:3000"]
 
     # ── Reranker 설정 ──────────────────────────────────────────────────────────
